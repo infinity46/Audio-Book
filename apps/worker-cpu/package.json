@@ -1,0 +1,32 @@
+{
+  "name": "@audio-book/worker-cpu",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./processors/maintenance": "./dist/processors/maintenance.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "start:dev": "tsx watch src/main.ts",
+    "start": "node dist/main.js",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@audio-book/config": "workspace:*",
+    "@audio-book/database": "workspace:*",
+    "@audio-book/errors": "workspace:*",
+    "@audio-book/events": "workspace:*",
+    "@audio-book/logging": "workspace:*",
+    "@audio-book/observability": "workspace:*",
+    "@audio-book/queue": "workspace:*",
+    "@audio-book/storage": "workspace:*",
+    "ioredis": "^5.4.2"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}

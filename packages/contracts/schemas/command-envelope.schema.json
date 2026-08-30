@@ -1,0 +1,72 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://audio-book.local/contracts/command-envelope.v1.json",
+  "title": "CommandEnvelope",
+  "description": "Command (queue job) envelope per docs/architecture/event-contracts.md §6. message_id is identity of THIS delivery — new every enqueue/retry, never reused; contrast with EventEnvelope.event_id which is stable across redeliveries.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "message_id",
+    "message_type",
+    "schema_version",
+    "enqueued_at",
+    "correlation_id",
+    "causation_id",
+    "tenant_id",
+    "job_id",
+    "attempt",
+    "lease_fence",
+    "idempotency_key",
+    "priority",
+    "producer",
+    "producer_version",
+    "payload"
+  ],
+  "properties": {
+    "message_id": { "type": "string", "format": "uuid" },
+    "message_type": {
+      "type": "string",
+      "minLength": 1,
+      "description": "One of the message types defined in context.md §11.2 (17 total). Left as an open string rather than a closed enum in Phase 1 because that document's full vocabulary was not transcribed here — enumerating a partial/guessed list would risk inventing names. Tighten to an enum once §11.2 is transcribed."
+    },
+    "schema_version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+$",
+      "description": "MAJOR.MINOR of this message_type's payload schema."
+    },
+    "enqueued_at": { "type": "string", "format": "date-time" },
+    "correlation_id": { "type": "string", "format": "uuid" },
+    "causation_id": { "type": "string", "format": "uuid" },
+    "tenant_id": { "type": "string", "format": "uuid" },
+    "book_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Required except cleanup_artifacts at tenant scope."
+    },
+    "book_version_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Required downstream of structural analysis."
+    },
+    "job_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Durable identity of the work; survives every retry."
+    },
+    "attempt": { "type": "integer", "minimum": 1 },
+    "lease_fence": {
+      "type": "integer",
+      "description": "Fencing token; a stale token is refused by the receiver."
+    },
+    "idempotency_key": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Server-derived, never client-supplied."
+    },
+    "priority": { "type": "string", "enum": ["INTERACTIVE", "NORMAL", "BULK"] },
+    "producer": { "type": "string", "minLength": 1 },
+    "producer_version": { "type": "string", "minLength": 1 },
+    "traceparent": { "type": "string" },
+    "payload": { "type": "object" }
+  }
+}

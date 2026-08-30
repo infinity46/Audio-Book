@@ -1,0 +1,51 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+**/node_modules/
+
+# Build output
+dist/
+build/
+*.tsbuildinfo
+**/dist/
+
+# Env / secrets — never commit real env files
+.env
+.env.*
+!.env.example
+
+# Python
+python/**/.venv/
+python/**/__pycache__/
+python/**/*.pyc
+python/.uv-cache/
+python/**/.pytest_cache/
+python/**/.mypy_cache/
+python/**/.ruff_cache/
+python/uv.lock.tmp
+
+# Prisma
+prisma/generated/
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# OS
+.DS_Store
+
+# IDE
+.vscode/*
+!.vscode/extensions.json
+.idea/
+
+# Local infra volumes
+infra/docker/volumes/
+
+# Coverage
+coverage/
+.nyc_output/
+
+# Claude
+.claude/scheduled_tasks.lock

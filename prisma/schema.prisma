@@ -1,0 +1,3305 @@
+// =============================================================================
+// Audiobook Production Platform — Prisma schema
+//
+// DERIVED FROM: docs/architecture/database-schema.md (`db-schema.v1.1`).
+// That document is the persistence contract of record. This file is derived
+// from it and is NEVER the reverse (database-schema.md §36, §45 rule 2).
+//
+// Everything Prisma cannot express — partial unique indexes, CHECK constraints,
+// the `character_alias` exclusion constraint, GENERATED ALWAYS ... STORED
+// columns, `audit_log` partitioning, `citext`, and the pgvector column type —
+// lives in prisma/migrations/0001_init/migration.sql and is asserted by the
+// mandatory drift test (§36, §41.3 check 12). See prisma/README.md.
+//
+// ID generation is APPLICATION-SIDE UUIDv7 (§3.1, §36 "UUID generation").
+// No `@default(uuid())` and no `@default(dbgenerated(...))` appears anywhere.
+// =============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// =============================================================================
+// ENUMS — database-schema.md §24 ("Enum inventory"). Members are verbatim from
+// the upstream contract. Where the upstream vocabulary is lowercase (`job_type`,
+// `job_queue`, `resource_type`) it is preserved lowercase: §4 requires members
+// "verbatim from the upstream contract" and §24 prints them that way.
+// =============================================================================
+
+// --- §7 Identity and tenancy -------------------------------------------------
+
+enum TenantStatus {
+  ACTIVE
+  SUSPENDED
+  CLOSED
+
+  @@map("tenant_status")
+}
+
+enum UserStatus {
+  PENDING_VERIFICATION
+  ACTIVE
+  SUSPENDED
+  CLOSED
+
+  @@map("user_status")
+}
+
+/// Provisional set (`api-specification.md` §6.2). OQ-DB-6 — confirm before Phase 2;
+/// removing a member later is a Breaking migration (§5.1, §44).
+enum PrincipalRole {
+  TENANT_OWNER
+  TENANT_MEMBER
+  PLATFORM_ADMIN
+  SERVICE
+  WORKER
+
+  @@map("principal_role")
+}
+
+enum ProviderKind {
+  LOCAL
+  OIDC
+
+  @@map("provider_kind")
+}
+
+enum UsageMetric {
+  CONCURRENT_BOOKS
+  GPU_MINUTES
+  STORAGE_BYTES
+  BOOKS_TOTAL
+  LLM_TOKENS
+
+  @@map("usage_metric")
+}
+
+// --- §8 Book, source files, book versioning ----------------------------------
+
+enum BookStatus {
+  CREATED
+  UPLOADED
+  PARSING
+  PARSED
+  STRUCTURED
+  ANALYZING
+  ANALYZED
+  CASTING
+  SCRIPTING
+  SCRIPTED
+  GENERATING
+  ASSEMBLING
+  COMPLETED
+  FAILED
+  CANCELLED
+  NEEDS_REVIEW
+
+  @@map("book_status")
+}
+
+enum BookFileStatus {
+  ADMITTED
+  REJECTED
+  QUARANTINED
+
+  @@map("book_file_status")
+}
+
+enum BookSourceKind {
+  PDF
+  EPUB
+  IMAGE_SET
+
+  @@map("book_source_kind")
+}
+
+enum BookVersionStatus {
+  CREATED
+  PARSING
+  PARSED
+  NORMALIZED
+  STRUCTURED
+  READY
+  PARTIAL_OCR
+  NEEDS_REVIEW
+  FAILED
+  SUPERSEDED
+
+  @@map("book_version_status")
+}
+
+enum MatterType {
+  FRONT_MATTER
+  BODY
+  BACK_MATTER
+
+  @@map("matter_type")
+}
+
+enum ExtractionMethod {
+  DIGITAL_TEXT
+  OCR
+  EPUB_SPINE
+  IMAGE_OCR
+
+  @@map("extraction_method")
+}
+
+enum TextQcOutcome {
+  PASS
+  WARN
+  NEEDS_REVIEW
+
+  @@map("text_qc_outcome")
+}
+
+/// §8.4 `parsed_page.status` (`OK | NEEDS_REVIEW | FAILED`). §24 does not name the
+/// type; named here per the §4 convention `<domain>_<concept>`.
+enum ParsedPageStatus {
+  OK
+  NEEDS_REVIEW
+  FAILED
+
+  @@map("parsed_page_status")
+}
+
+enum ValidationStatus {
+  PENDING
+  PASS
+  FAIL
+
+  @@map("validation_status")
+}
+
+// --- §10 Character registry --------------------------------------------------
+
+enum CharacterStatus {
+  CONFIRMED
+  PROVISIONAL
+  MERGED_INTO
+  RETIRED
+
+  @@map("character_status")
+}
+
+enum CharacterSentinel {
+  NARRATOR
+  UNKNOWN_SPEAKER
+  MULTIPLE_SPEAKERS
+  SYSTEM
+
+  @@map("character_sentinel")
+}
+
+enum CharacterAliasType {
+  GIVEN_NAME
+  FULL_NAME
+  SURNAME
+  NICKNAME
+  TITLE
+  EPITHET
+  DESCRIPTOR
+  RELATIONAL
+
+  @@map("character_alias_type")
+}
+
+enum AliasScope {
+  GLOBAL
+  CHAPTER
+  SPEAKER
+
+  @@map("alias_scope")
+}
+
+/// §10.1 `character.detection_source`. Type name per the §4 convention.
+enum DetectionSource {
+  NARRATIVE_UNDERSTANDING
+  DIRECTOR
+  USER
+
+  @@map("detection_source")
+}
+
+/// §10.2 `character_alias.source`, §11.9 `pronunciation_entry.source`
+/// (`EXTRACTED | USER`). Type name per the §4 convention.
+enum ExtractionSource {
+  EXTRACTED
+  USER
+
+  @@map("extraction_source")
+}
+
+/// §10.3 `character_merge.operation` (`MERGE | SPLIT`).
+enum MergeOperation {
+  MERGE
+  SPLIT
+
+  @@map("merge_operation")
+}
+
+/// §24 lists this type ("recorded, not merely used"); no column in the document
+/// declares it. Retained so the type exists; see prisma/README.md open questions.
+enum ResolutionStrategy {
+  EXPLICIT_ATTRIBUTION
+  EXACT_ALIAS
+  SCOPED_ALIAS
+  PRONOUN
+  TURN_TAKING
+  LLM_ADJUDICATION
+  FALLBACK
+
+  @@map("resolution_strategy")
+}
+
+/// Fixed by `director-specification.md` §4.4; synchronized verbatim (§10.4).
+enum RelationshipType {
+  FAMILY
+  ROMANTIC
+  FRIENDSHIP
+  RIVALRY
+  ADVERSARIAL
+  MENTOR
+  PROFESSIONAL
+  AUTHORITY
+  ALLIANCE
+  BETRAYAL
+  UNKNOWN
+
+  @@map("relationship_type")
+}
+
+// --- §11 Story Bible ---------------------------------------------------------
+
+enum StoryBibleStatus {
+  NOT_BUILT
+  BUILDING
+  READY
+  STALE
+  FAILED
+
+  @@map("story_bible_status")
+}
+
+enum StoryBibleStaleReason {
+  STRUCTURE_CHANGED
+  CHARACTERS_MERGED
+  SOURCE_TEXT_CHANGED
+
+  @@map("story_bible_stale_reason")
+}
+
+/// §11.3 `story_bible_version.build_mode` (`INCREMENTAL | REBUILD`).
+enum StoryBibleBuildMode {
+  INCREMENTAL
+  REBUILD
+
+  @@map("story_bible_build_mode")
+}
+
+enum ContextLayer {
+  L1
+  L2
+  L3
+  L4
+  L5
+  L6
+
+  @@map("context_layer")
+}
+
+enum SummaryLevel {
+  PARAGRAPH
+  SCENE
+  CHAPTER
+  PART
+  BOOK
+
+  @@map("summary_level")
+}
+
+enum PovType {
+  FIRST
+  THIRD_LIMITED
+  THIRD_OMNISCIENT
+  SECOND
+  MIXED
+
+  @@map("pov_type")
+}
+
+/// §11.5 `narrative_state.checkpoint_kind`.
+enum CheckpointKind {
+  SCENE_BOUNDARY
+  CHAPTER_BOUNDARY
+
+  @@map("checkpoint_kind")
+}
+
+/// §11.6 `narrative_timeline_event.span_kind`.
+enum SpanKind {
+  NORMAL
+  FLASHBACK
+  FLASH_FORWARD
+
+  @@map("span_kind")
+}
+
+/// §11.6 `narrative_thread.kind`.
+enum NarrativeThreadKind {
+  OPEN_QUESTION
+  SECRET
+  DRAMATIC_IRONY
+  FORESHADOWING
+
+  @@map("narrative_thread_kind")
+}
+
+/// §11.6 `narrative_thread.status`.
+enum NarrativeThreadStatus {
+  OPEN
+  RESOLVED
+  ABANDONED
+
+  @@map("narrative_thread_status")
+}
+
+/// §11.8 `narrative_embedding.source_kind`.
+enum EmbeddingSourceKind {
+  SUMMARY
+  SCENE
+  PARAGRAPH
+
+  @@map("embedding_source_kind")
+}
+
+/// §11.9 `pronunciation_entry.applies_to`.
+enum PronunciationScope {
+  GLOBAL
+  CHARACTER
+  CHAPTER
+
+  @@map("pronunciation_scope")
+}
+
+// --- §12 Voice registry ------------------------------------------------------
+
+enum VoiceProfileScope {
+  TENANT
+  BOOK
+  SYSTEM
+
+  @@map("voice_profile_scope")
+}
+
+enum VoiceApprovalState {
+  DRAFT
+  PREVIEW_GENERATED
+  APPROVED
+  LOCKED
+  RETIRED
+
+  @@map("voice_approval_state")
+}
+
+enum VoiceLockState {
+  UNLOCKED
+  LOCKED
+
+  @@map("voice_lock_state")
+}
+
+enum VoiceLockReason {
+  USED_IN_GENERATION
+  USER_LOCKED
+
+  @@map("voice_lock_reason")
+}
+
+enum VoicePreviewStatus {
+  GENERATING
+  READY
+  FAILED
+  EXPIRED
+
+  @@map("voice_preview_status")
+}
+
+enum VoiceAssignmentRole {
+  NARRATOR
+  CHARACTER
+  ALTERNATE
+
+  @@map("voice_assignment_role")
+}
+
+enum ConsentSubject {
+  SYNTHETIC
+  SELF
+  THIRD_PARTY_CONSENTED
+
+  @@map("consent_subject")
+}
+
+/// §12.2 `voice_profile_version.reference_provenance`.
+enum ReferenceProvenance {
+  UPLOADED
+  LIBRARY
+  SYNTHESIZED
+
+  @@map("reference_provenance")
+}
+
+// --- §13 Audio Script IR -----------------------------------------------------
+
+enum SpeakerType {
+  NARRATOR
+  CHARACTER
+  UNKNOWN
+  SYSTEM
+
+  @@map("speaker_type")
+}
+
+enum DeliveryMode {
+  NORMAL
+  INTERNAL_THOUGHT
+  WHISPER
+  SHOUT
+  LAUGHING
+  CRYING
+  SINGING
+  READING_ALOUD
+
+  @@map("delivery_mode")
+}
+
+/// Closed vocabulary owned by `director-specification.md` §4.1 (seventeen members).
+enum Emotion {
+  NEUTRAL
+  HAPPY
+  SAD
+  GRIEF
+  ANGRY
+  FEARFUL
+  SURPRISED
+  DISGUSTED
+  EXCITED
+  CALM
+  TENSE
+  ANXIOUS
+  SOMBER
+  CONFIDENT
+  UNCERTAIN
+  PLAYFUL
+  SERIOUS
+
+  @@map("emotion")
+}
+
+enum AudioScriptState {
+  DRAFT
+  VALIDATED
+  SUPERSEDED
+
+  @@map("audio_script_state")
+}
+
+enum AudioScriptChunkState {
+  DRAFT
+  VALIDATED
+  LOCKED
+  SUPERSEDED
+
+  @@map("audio_script_chunk_state")
+}
+
+/// §13.1 `audio_script.scope` (`BOOK | CHAPTER`).
+enum AudioScriptScope {
+  BOOK
+  CHAPTER
+
+  @@map("audio_script_scope")
+}
+
+enum ChunkOrigin {
+  AUTO_GENERATED
+  HUMAN_REVIEWED
+  HUMAN_MODIFIED
+  LOCKED
+
+  @@map("chunk_origin")
+}
+
+enum ReviewFlag {
+  DIRECTOR_FALLBACK
+  UNKNOWN_SPEAKER
+  LOW_CONFIDENCE
+  CHARACTER_METADATA_CHANGED
+  PRONUNCIATION_LEXICON_CHANGED
+  CAPABILITY_GAP
+  TEXT_HASH_MISMATCH
+
+  @@map("review_flag")
+}
+
+// --- §16 Audio production ----------------------------------------------------
+
+enum TtsJobStatus {
+  PENDING
+  RUNNING
+  SUCCEEDED
+  FAILED
+  CANCELLED
+
+  @@map("tts_job_status")
+}
+
+enum AudioChunkStatus {
+  PENDING
+  GENERATING
+  GENERATED
+  VALIDATED
+  ASSEMBLED
+  FAILED
+  INVALID
+  SUPERSEDED
+
+  @@map("audio_chunk_status")
+}
+
+enum ChapterAudioStatus {
+  PENDING
+  ASSEMBLING
+  ASSEMBLED
+  INVALID
+  SUPERSEDED
+
+  @@map("chapter_audio_status")
+}
+
+enum AudiobookStatus {
+  DRAFT_METADATA
+  ASSEMBLING
+  READY
+  FAILED
+  SUPERSEDED
+
+  @@map("audiobook_status")
+}
+
+enum AudioFormat {
+  WAV
+  FLAC
+  AAC
+  MP3
+
+  @@map("audio_format")
+}
+
+enum DeliveryFormat {
+  M4B
+  M4A
+  MP3_PER_CHAPTER
+
+  @@map("delivery_format")
+}
+
+// --- §15 Jobs and attempts ---------------------------------------------------
+
+enum JobStatus {
+  CREATED
+  QUEUED
+  RUNNING
+  RETRYING
+  BLOCKED
+  SUCCEEDED
+  FAILED
+  CANCELLED
+  DEAD_LETTERED
+
+  @@map("job_status")
+}
+
+/// The seventeen names of `context.md` §11.2, verbatim (lowercase `verb_noun`).
+enum JobType {
+  parse_book
+  ocr_page
+  normalize_text
+  analyze_structure
+  analyze_scene
+  build_story_bible_delta
+  generate_director_ir
+  revise_director_ir
+  generate_voice_preview
+  generate_tts_chunk
+  validate_audio
+  process_audio
+  verify_transcript
+  assemble_chapter
+  assemble_audiobook
+  encode_delivery_format
+  cleanup_artifacts
+
+  @@map("job_type")
+}
+
+/// `context.md` §11.2, verbatim (lowercase).
+enum JobQueue {
+  parse
+  ai
+  gpu
+  audio
+  maintenance
+
+  @@map("job_queue")
+}
+
+enum JobPriority {
+  INTERACTIVE
+  NORMAL
+  BULK
+
+  @@map("job_priority")
+}
+
+enum AttemptStatus {
+  RUNNING
+  SUCCEEDED
+  FAILED
+  CANCELLED
+  REAPED
+
+  @@map("attempt_status")
+}
+
+enum DependencyKind {
+  UPSTREAM_JOB
+  HUMAN_GATE
+
+  @@map("dependency_kind")
+}
+
+enum IdempotencyStatus {
+  IN_PROGRESS
+  COMPLETED
+  FAILED
+
+  @@map("idempotency_status")
+}
+
+/// §15.6, `event-contracts.md` §19.
+enum OutboxStatus {
+  PENDING
+  PUBLISHED
+  FAILED
+
+  @@map("outbox_status")
+}
+
+/// §15.7, `event-contracts.md` §20.
+enum InboxOutcome {
+  PROCESSED
+  SKIPPED
+  FAILED
+
+  @@map("inbox_outcome")
+}
+
+/// `api-specification.md` §16.18 `related_resource.type` — lowercase verbatim.
+enum ResourceType {
+  book
+  book_file
+  book_version
+  chapter
+  scene
+  paragraph
+  character
+  story_bible_version
+  voice_profile
+  voice_profile_version
+  audio_script
+  audio_script_chunk
+  audio_chunk
+  chapter_audio
+  audiobook
+  job
+  tenant
+  user
+
+  @@map("resource_type")
+}
+
+// --- §14 Model registry / §15.5 workers / §17 audit --------------------------
+
+enum ModelRole {
+  PARSER
+  OCR
+  NORMALIZER
+  LLM
+  TTS
+  ASR
+  AUDIO_TOOL
+  EMBEDDING
+
+  @@map("model_role")
+}
+
+/// §14.2 `model_registry.status` (`ACTIVE | DEPRECATED | QUARANTINED`).
+enum ModelRegistryStatus {
+  ACTIVE
+  DEPRECATED
+  QUARANTINED
+
+  @@map("model_registry_status")
+}
+
+enum WorkerKind {
+  CPU
+  AI
+  GPU
+
+  @@map("worker_kind")
+}
+
+enum WorkerStatus {
+  STARTING
+  READY
+  DRAINING
+  QUARANTINED
+  STOPPED
+
+  @@map("worker_status")
+}
+
+enum ActorKind {
+  USER
+  SERVICE
+  WORKER
+  SYSTEM
+
+  @@map("actor_kind")
+}
+
+/// §17.1's list of audited actions, one member per named action.
+enum AuditAction {
+  BOOK_CREATED
+  BOOK_DELETED
+  BOOK_RESTORED
+  BOOK_PURGED
+  UPLOAD_FINALIZED
+  FILE_QUARANTINED
+  CHARACTER_UPDATED
+  CHARACTER_MERGED
+  ALIAS_CHANGED
+  PRONUNCIATION_CHANGED
+  VOICE_VERSION_CREATED
+  VOICE_APPROVED
+  VOICE_LOCKED
+  VOICE_RETIRED
+  VOICE_ASSIGNED
+  NARRATOR_FALLBACK_ACCEPTED
+  DIRECTOR_REGENERATION_REQUESTED
+  DIRECTOR_VERSION_MIXING_ACKNOWLEDGED
+  FORCED_REGENERATION
+  TTS_REGENERATION_REQUESTED
+  ASSEMBLY_REQUESTED
+  AUDIOBOOK_PUBLISHED
+  ACCESS_URL_MINTED
+  QUOTA_CHANGED
+  JOB_CANCELLED
+  JOB_REPLAYED
+  ADMIN_CROSS_TENANT_READ
+  ROLE_CHANGED
+  SESSION_REVOKED
+  REFRESH_TOKEN_REUSE_DETECTED
+
+  @@map("audit_action")
+}
+
+/// §17.1 `audit_log.outcome` (`SUCCESS | FAILURE`).
+enum AuditOutcome {
+  SUCCESS
+  FAILURE
+
+  @@map("audit_outcome")
+}
+
+// --- §4.4 storage reference group / §4.3 hashes ------------------------------
+
+enum StorageClass {
+  STANDARD
+  INFREQUENT
+  ARCHIVED
+  EXPIRED
+
+  @@map("storage_class")
+}
+
+enum HashAlgorithm {
+  SHA256
+
+  @@map("hash_algorithm")
+}
+
+// =============================================================================
+// §7 — IDENTITY, TENANCY, ACCESS
+// =============================================================================
+
+/// §7.1. Soft-deletable (§27.2). Partial index `(status) WHERE deleted_at IS NULL`
+/// lives in migration.sql.
+model Tenant {
+  id        String       @id @db.Uuid
+  name      String
+  status    TenantStatus
+  planCode  String       @map("plan_code")
+  createdAt DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt DateTime?    @map("deleted_at") @db.Timestamptz(6)
+
+  users                User[]
+  sessions             Session[]
+  quota                TenantQuota?
+  usageCounters        TenantUsageCounter[]
+  books                Book[]
+  voiceProfiles        VoiceProfile[]
+  voiceProfileVersions VoiceProfileVersion[]
+  voicePreviews        VoicePreview[]
+  processingJobs       ProcessingJob[]
+  processingAttempts   ProcessingAttempt[]
+  idempotencyKeys      IdempotencyKey[]
+  auditLogs            AuditLog[]
+  outboxMessages       OutboxMessage[]
+
+  @@map("tenant")
+}
+
+/// §7.2. `email` is `citext` in PostgreSQL — Prisma has no citext type, so the
+/// column is widened to citext in migration.sql. Soft-deletable (§27.2).
+model User {
+  id              String          @id @db.Uuid
+  tenantId        String          @map("tenant_id") @db.Uuid
+  email           String          @unique
+  emailVerifiedAt DateTime?       @map("email_verified_at") @db.Timestamptz(6)
+  displayName     String          @map("display_name")
+  status          UserStatus
+  roles           PrincipalRole[]
+  preferences     Json            @db.JsonB
+  locale          String?
+  lastLoginAt     DateTime?       @map("last_login_at") @db.Timestamptz(6)
+  rowVersion      Int             @default(0) @map("row_version")
+  createdAt       DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime        @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt       DateTime?       @map("deleted_at") @db.Timestamptz(6)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+
+  credential                        UserCredential?
+  identities                        UserIdentity[]
+  sessions                          Session[]
+  refreshTokens                     RefreshToken[]
+  quotasUpdated                     TenantQuota[]         @relation("TenantQuotaUpdatedBy")
+  booksCreated                      Book[]                @relation("BookCreatedBy")
+  booksNarratorFallbackAccepted     Book[]                @relation("BookNarratorFallbackAcceptedBy")
+  booksDirectorVersionMixingAckd    Book[]                @relation("BookDirectorVersionMixingAckBy")
+  characterMergesPerformed          CharacterMerge[]      @relation("CharacterMergePerformedBy")
+  pronunciationEntriesCreated       PronunciationEntry[]  @relation("PronunciationEntryCreatedBy")
+  voiceProfilesCreated              VoiceProfile[]        @relation("VoiceProfileCreatedBy")
+  voiceProfileVersionsCreated       VoiceProfileVersion[] @relation("VoiceProfileVersionCreatedBy")
+  voiceProfileVersionsApproved      VoiceProfileVersion[] @relation("VoiceProfileVersionApprovedBy")
+  voiceProfileVersionsConsented     VoiceProfileVersion[] @relation("VoiceProfileVersionConsentAttestedBy")
+  voiceAssignmentsMade              VoiceAssignment[]     @relation("VoiceAssignmentAssignedBy")
+  audiobookCoversUploaded           AudiobookCover[]      @relation("AudiobookCoverUploadedBy")
+  processingJobsCreated             ProcessingJob[]       @relation("ProcessingJobCreatedBy")
+  processingJobsForced              ProcessingJob[]       @relation("ProcessingJobForcedBy")
+  processingJobsCancellationRequest ProcessingJob[]       @relation("ProcessingJobCancellationRequestedBy")
+  auditLogs                         AuditLog[]            @relation("AuditLogActor")
+
+  @@map("user")
+}
+
+/// §7.3. Secret-bearing columns are restricted at the role level (§37.3).
+model UserCredential {
+  id                 String    @id @db.Uuid
+  userId             String    @unique @map("user_id") @db.Uuid
+  passwordHash       String    @map("password_hash")
+  passwordAlgorithm  String    @map("password_algorithm")
+  passwordUpdatedAt  DateTime  @map("password_updated_at") @db.Timestamptz(6)
+  mfaEnrolled        Boolean   @map("mfa_enrolled")
+  mfaSecretRef       String?   @map("mfa_secret_ref")
+  failedAttemptCount Int       @map("failed_attempt_count")
+  lockedUntil        DateTime? @map("locked_until") @db.Timestamptz(6)
+  createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_credential")
+}
+
+/// §7.3.
+model UserIdentity {
+  id                  String       @id @db.Uuid
+  userId              String       @map("user_id") @db.Uuid
+  provider            ProviderKind
+  issuer              String
+  subject             String
+  emailAtProvider     String?      @map("email_at_provider")
+  linkedAt            DateTime     @map("linked_at") @db.Timestamptz(6)
+  lastAuthenticatedAt DateTime?    @map("last_authenticated_at") @db.Timestamptz(6)
+  createdAt           DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt           DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, issuer, subject])
+  @@map("user_identity")
+}
+
+/// §7.4. Exposed at `GET /users/me/sessions` with exactly these fields — no raw
+/// IP, no full user agent.
+model Session {
+  id               String    @id @db.Uuid
+  userId           String    @map("user_id") @db.Uuid
+  tenantId         String    @map("tenant_id") @db.Uuid
+  lastSeenAt       DateTime? @map("last_seen_at") @db.Timestamptz(6)
+  expiresAt        DateTime  @map("expires_at") @db.Timestamptz(6)
+  revokedAt        DateTime? @map("revoked_at") @db.Timestamptz(6)
+  revocationReason String?   @map("revocation_reason")
+  userAgentFamily  String?   @map("user_agent_family")
+  ipCountry        String?   @map("ip_country")
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+
+  refreshTokens RefreshToken[]
+
+  @@map("session")
+}
+
+/// §7.4. The token itself is never stored; only its SHA-256.
+model RefreshToken {
+  id               String    @id @db.Uuid
+  sessionId        String    @map("session_id") @db.Uuid
+  userId           String    @map("user_id") @db.Uuid
+  familyId         String    @map("family_id") @db.Uuid
+  tokenHash        String    @unique @map("token_hash") @db.Char(64)
+  issuedAt         DateTime  @map("issued_at") @db.Timestamptz(6)
+  expiresAt        DateTime  @map("expires_at") @db.Timestamptz(6)
+  rotatedAt        DateTime? @map("rotated_at") @db.Timestamptz(6)
+  rotatedToId      String?   @map("rotated_to_id") @db.Uuid
+  revokedAt        DateTime? @map("revoked_at") @db.Timestamptz(6)
+  reuseDetectedAt  DateTime? @map("reuse_detected_at") @db.Timestamptz(6)
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  session  Session       @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  user     User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  rotatedTo RefreshToken? @relation("RefreshTokenRotation", fields: [rotatedToId], references: [id], onDelete: SetNull)
+  rotatedFrom RefreshToken[] @relation("RefreshTokenRotation")
+
+  @@index([familyId])
+  @@index([expiresAt])
+  @@map("refresh_token")
+}
+
+/// §7.5. `created_at` is added per the §4 universal timestamp rule.
+model TenantQuota {
+  tenantId               String   @id @map("tenant_id") @db.Uuid
+  concurrentBooksLimit   Int      @map("concurrent_books_limit")
+  gpuMinutesMonthlyLimit Int      @map("gpu_minutes_monthly_limit")
+  storageBytesLimit      BigInt   @map("storage_bytes_limit")
+  booksTotalLimit        Int      @map("books_total_limit")
+  updatedByUserId        String?  @map("updated_by_user_id") @db.Uuid
+  createdAt              DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt              DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  tenant        Tenant @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  updatedByUser User?  @relation("TenantQuotaUpdatedBy", fields: [updatedByUserId], references: [id], onDelete: Restrict)
+
+  @@map("tenant_quota")
+}
+
+/// §7.5. Increments use `UPDATE ... SET used_value = used_value + n`.
+model TenantUsageCounter {
+  id          String      @id @db.Uuid
+  tenantId    String      @map("tenant_id") @db.Uuid
+  periodStart DateTime    @map("period_start") @db.Timestamptz(6)
+  periodEnd   DateTime    @map("period_end") @db.Timestamptz(6)
+  metric      UsageMetric
+  usedValue   BigInt      @map("used_value")
+  createdAt   DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime    @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+
+  @@unique([tenantId, periodStart, metric])
+  @@map("tenant_usage_counter")
+}
+
+// =============================================================================
+// §8 — BOOK, SOURCE FILES, BOOK VERSIONING
+// =============================================================================
+
+/// §8.1. The aggregate root. `UNIQUE (id, tenant_id)` is the anchor for every
+/// composite tenancy FK (§4.1). All six of its list indexes are partial and
+/// therefore live in migration.sql.
+model Book {
+  id       String @id @db.Uuid
+  tenantId String @map("tenant_id") @db.Uuid
+
+  // Metadata
+  title           String
+  author          String?
+  language        String
+  description     String?
+  series          String?
+  seriesIndex     Int?    @map("series_index")
+  publicationYear Int?    @map("publication_year")
+  publisher       String?
+
+  // Lifecycle
+  status          BookStatus
+  statusChangedAt DateTime   @map("status_changed_at") @db.Timestamptz(6)
+  needsReview     Boolean    @default(false) @map("needs_review")
+  pipelineVersion String     @map("pipeline_version")
+
+  // Current pointers
+  currentBookVersionId String? @map("current_book_version_id") @db.Uuid
+  currentAudioScriptId String? @map("current_audio_script_id") @db.Uuid
+  currentAudiobookId   String? @map("current_audiobook_id") @db.Uuid
+
+  // Explicit user decisions (§8.1)
+  autoIngest                                Boolean   @default(false) @map("auto_ingest")
+  narratorFallbackAccepted                  Boolean   @default(false) @map("narrator_fallback_accepted")
+  narratorFallbackAppliesTo                 String?   @map("narrator_fallback_applies_to")
+  narratorFallbackMaxLineCount              Int?      @map("narrator_fallback_max_line_count")
+  narratorFallbackAcceptedByUserId          String?   @map("narrator_fallback_accepted_by_user_id") @db.Uuid
+  narratorFallbackAcceptedAt                DateTime? @map("narrator_fallback_accepted_at") @db.Timestamptz(6)
+  directorVersionMixingAcknowledgedByUserId String?   @map("director_version_mixing_acknowledged_by_user_id") @db.Uuid
+  directorVersionMixingAcknowledgedAt       DateTime? @map("director_version_mixing_acknowledged_at") @db.Timestamptz(6)
+  partialOcrAcknowledgedAt                  DateTime? @map("partial_ocr_acknowledged_at") @db.Timestamptz(6)
+
+  // Concurrency & audit
+  rowVersion      Int       @default(0) @map("row_version")
+  createdByUserId String    @map("created_by_user_id") @db.Uuid
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt       DateTime? @map("deleted_at") @db.Timestamptz(6)
+
+  tenant        Tenant       @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  createdByUser User         @relation("BookCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  narratorFallbackAcceptedByUser User? @relation("BookNarratorFallbackAcceptedBy", fields: [narratorFallbackAcceptedByUserId], references: [id], onDelete: Restrict)
+  directorVersionMixingAcknowledgedByUser User? @relation("BookDirectorVersionMixingAckBy", fields: [directorVersionMixingAcknowledgedByUserId], references: [id], onDelete: Restrict)
+  currentBookVersion BookVersion? @relation("BookCurrentBookVersion", fields: [currentBookVersionId], references: [id], onDelete: SetNull)
+  currentAudioScript AudioScript? @relation("BookCurrentAudioScript", fields: [currentAudioScriptId], references: [id], onDelete: SetNull)
+  currentAudiobook   Audiobook?   @relation("BookCurrentAudiobook", fields: [currentAudiobookId], references: [id], onDelete: SetNull)
+
+  counter                 BookCounter?
+  storyBible              StoryBible?
+  files                   BookFile[]
+  versions                BookVersion[]           @relation("BookVersions")
+  parsedPages             ParsedPage[]
+  chapters                Chapter[]
+  sections                Section[]
+  scenes                  Scene[]
+  paragraphs              Paragraph[]
+  characters              Character[]
+  characterAliases        CharacterAlias[]
+  characterMerges         CharacterMerge[]
+  characterRelationships  CharacterRelationship[]
+  storyBibleVersions      StoryBibleVersion[]
+  narrativeStates         NarrativeState[]
+  sceneSemantics          SceneSemantics[]
+  narrativeLocations      NarrativeLocation[]
+  narrativeTimelineEvents NarrativeTimelineEvent[]
+  narrativeObjects        NarrativeObject[]
+  narrativeFactions       NarrativeFaction[]
+  narrativeThreads        NarrativeThread[]
+  narrativeSummaries      NarrativeSummary[]
+  narrativeEmbeddings     NarrativeEmbedding[]
+  pronunciationEntries    PronunciationEntry[]
+  voiceProfiles           VoiceProfile[]
+  voiceAssignments        VoiceAssignment[]
+  voicePreviews           VoicePreview[]
+  audioScripts            AudioScript[]           @relation("BookAudioScripts")
+  audioScriptChunks       AudioScriptChunk[]
+  audioScriptChunkSources AudioScriptChunkSource[]
+  ttsJobs                 TtsJob[]
+  audioChunks             AudioChunk[]
+  chapterAudios           ChapterAudio[]
+  chapterAudioMembers     ChapterAudioMember[]
+  audiobooks              Audiobook[]             @relation("BookAudiobooks")
+  audiobookChapters       AudiobookChapter[]
+  audiobookRenditions     AudiobookRendition[]
+  audiobookCovers         AudiobookCover[]
+  processingJobs          ProcessingJob[]
+  processingAttempts      ProcessingAttempt[]
+  outboxMessages          OutboxMessage[]
+
+  @@unique([id, tenantId])
+  @@map("book")
+}
+
+/// §18.1. An explicit derived cache, never a source of truth. No gate,
+/// constraint, or correctness decision may read it (§31.2).
+model BookCounter {
+  bookId                   String   @id @map("book_id") @db.Uuid
+  tenantId                 String   @map("tenant_id") @db.Uuid
+  chapterCount             Int      @default(0) @map("chapter_count")
+  sectionCount             Int      @default(0) @map("section_count")
+  sceneCount               Int      @default(0) @map("scene_count")
+  paragraphCount           Int      @default(0) @map("paragraph_count")
+  characterCount           Int      @default(0) @map("character_count")
+  speakingCharacterCount   Int      @default(0) @map("speaking_character_count")
+  audioScriptChunkCount    Int      @default(0) @map("audio_script_chunk_count")
+  audioChunkGeneratedCount Int      @default(0) @map("audio_chunk_generated_count")
+  audioChunkValidatedCount Int      @default(0) @map("audio_chunk_validated_count")
+  audioChunkFailedCount    Int      @default(0) @map("audio_chunk_failed_count")
+  audioChunkInvalidCount   Int      @default(0) @map("audio_chunk_invalid_count")
+  chapterAudioCount        Int      @default(0) @map("chapter_audio_count")
+  needsReviewCount         Int      @default(0) @map("needs_review_count")
+  totalAudioDurationMs     BigInt   @default(0) @map("total_audio_duration_ms")
+  recomputedAt             DateTime? @map("recomputed_at") @db.Timestamptz(6)
+  createdAt                DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt                DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  book Book @relation(fields: [bookId, tenantId], references: [id, tenantId], onDelete: Cascade)
+
+  @@unique([bookId, tenantId])
+  @@map("book_counter")
+}
+
+/// §8.2. Immutable: a new upload is a new row, never an edit.
+model BookFile {
+  id                        String         @id @db.Uuid
+  tenantId                  String         @map("tenant_id") @db.Uuid
+  bookId                    String         @map("book_id") @db.Uuid
+  sourceKind                BookSourceKind @map("source_kind")
+  originalFileName          String         @map("original_file_name")
+  mimeType                  String         @map("mime_type")
+  sniffedMimeType           String?        @map("sniffed_mime_type")
+  sizeBytes                 BigInt         @map("size_bytes")
+  contentHash               String         @map("content_hash") @db.Char(64)
+  contentHashAlgorithm      HashAlgorithm  @map("content_hash_algorithm")
+  status                    BookFileStatus
+  rejectionReasonCode       String?        @map("rejection_reason_code")
+  pageCount                 Int?           @map("page_count")
+  validation                Json?          @db.JsonB
+  uploadSessionId           String?        @map("upload_session_id")
+  deduplicatedFromBookFileId String?       @map("deduplicated_from_book_file_id") @db.Uuid
+
+  // §4.4 storage reference group
+  storageKey       String       @map("storage_key")
+  storageBucket    String       @map("storage_bucket")
+  objectVerifiedAt DateTime?    @map("object_verified_at") @db.Timestamptz(6)
+  storageClass     StorageClass @default(STANDARD) @map("storage_class")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  book                Book       @relation(fields: [bookId, tenantId], references: [id, tenantId], onDelete: Restrict)
+  deduplicatedFrom    BookFile?  @relation("BookFileDedup", fields: [deduplicatedFromBookFileId], references: [id], onDelete: Restrict)
+  deduplicatedInto    BookFile[] @relation("BookFileDedup")
+
+  bookVersions BookVersion[]
+
+  @@index([bookId, createdAt(sort: Desc)])
+  @@map("book_file")
+}
+
+/// §8.3. The reproducibility anchor. Introduced by the document (D-4, OQ-DB-1).
+model BookVersion {
+  id         String @id @db.Uuid
+  tenantId   String @map("tenant_id") @db.Uuid
+  bookId     String @map("book_id") @db.Uuid
+  bookFileId String @map("book_file_id") @db.Uuid
+
+  // Version chain (§4.2)
+  version                  Int
+  structureVersionLabel    String    @map("structure_version_label")
+  supersedesBookVersionId  String?   @map("supersedes_book_version_id") @db.Uuid
+  supersededByBookVersionId String?  @map("superseded_by_book_version_id") @db.Uuid
+  isCurrent                Boolean   @default(false) @map("is_current")
+  supersededAt             DateTime? @map("superseded_at") @db.Timestamptz(6)
+
+  // Content identity
+  contentHash        String @map("content_hash") @db.Char(64)
+  rawTextContentHash String @map("raw_text_content_hash") @db.Char(64)
+  pipelineVersion    String @map("pipeline_version")
+
+  // Processing provenance
+  parserStrategyUsed        String? @map("parser_strategy_used")
+  parserModelVersionId      String? @map("parser_model_version_id") @db.Uuid
+  ocrModelVersionId         String? @map("ocr_model_version_id") @db.Uuid
+  normalizerModelVersionId  String? @map("normalizer_model_version_id") @db.Uuid
+  parserOptions             Json?   @map("parser_options") @db.JsonB
+
+  // Artifacts
+  parsedDocumentStorageKey            String?   @map("parsed_document_storage_key")
+  parsedDocumentContentHash           String?   @map("parsed_document_content_hash") @db.Char(64)
+  parsedDocumentObjectVerifiedAt      DateTime? @map("parsed_document_object_verified_at") @db.Timestamptz(6)
+  ocrReportStorageKey                 String?   @map("ocr_report_storage_key")
+  ocrReportContentHash                String?   @map("ocr_report_content_hash") @db.Char(64)
+  ocrReportObjectVerifiedAt           DateTime? @map("ocr_report_object_verified_at") @db.Timestamptz(6)
+  canonicalTextManifestStorageKey     String?   @map("canonical_text_manifest_storage_key")
+  canonicalTextManifestContentHash    String?   @map("canonical_text_manifest_content_hash") @db.Char(64)
+  canonicalTextManifestObjectVerifiedAt DateTime? @map("canonical_text_manifest_object_verified_at") @db.Timestamptz(6)
+  storageBucket                       String    @map("storage_bucket")
+  storageClass                        StorageClass @default(STANDARD) @map("storage_class")
+
+  // Quality
+  status            BookVersionStatus
+  textQcOutcome     TextQcOutcome?    @map("text_qc_outcome")
+  textQc            Json?             @map("text_qc") @db.JsonB
+  pagesTotal        Int?              @map("pages_total")
+  pagesOk           Int?              @map("pages_ok")
+  pagesNeedsReview  Int?              @map("pages_needs_review")
+  degraded          Boolean           @default(false)
+
+  // Timing
+  startedAt   DateTime? @map("started_at") @db.Timestamptz(6)
+  completedAt DateTime? @map("completed_at") @db.Timestamptz(6)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  book     Book     @relation("BookVersions", fields: [bookId, tenantId], references: [id, tenantId], onDelete: Restrict)
+  bookFile BookFile @relation(fields: [bookFileId], references: [id], onDelete: Restrict)
+
+  supersedesBookVersion   BookVersion?  @relation("BookVersionSupersedes", fields: [supersedesBookVersionId], references: [id], onDelete: Restrict)
+  supersededBookVersions  BookVersion[] @relation("BookVersionSupersedes")
+  supersededByBookVersion BookVersion?  @relation("BookVersionSupersededBy", fields: [supersededByBookVersionId], references: [id], onDelete: Restrict)
+  supersedingBookVersions BookVersion[] @relation("BookVersionSupersededBy")
+
+  parserModelVersion     ModelVersion? @relation("BookVersionParserModel", fields: [parserModelVersionId], references: [id], onDelete: Restrict)
+  ocrModelVersion        ModelVersion? @relation("BookVersionOcrModel", fields: [ocrModelVersionId], references: [id], onDelete: Restrict)
+  normalizerModelVersion ModelVersion? @relation("BookVersionNormalizerModel", fields: [normalizerModelVersionId], references: [id], onDelete: Restrict)
+
+  currentForBooks    Book[]              @relation("BookCurrentBookVersion")
+  charactersFirstAppearingHere Character[] @relation("CharacterFirstAppearanceBookVersion")
+  charactersLastAppearingHere  Character[] @relation("CharacterLastAppearanceBookVersion")
+  parsedPages        ParsedPage[]
+  chapters           Chapter[]
+  sections           Section[]
+  scenes             Scene[]
+  paragraphs         Paragraph[]
+  storyBibleVersions StoryBibleVersion[]
+  narrativeStates    NarrativeState[]
+  audioScripts       AudioScript[]
+  audioChunks        AudioChunk[]
+  audiobooks         Audiobook[]
+
+  @@unique([bookId, version])
+  @@unique([id, bookId])
+  @@index([bookFileId])
+  @@map("book_version")
+}
+
+/// §8.4. Per-page extraction provenance (D-5).
+model ParsedPage {
+  id                String           @id @db.Uuid
+  tenantId          String           @map("tenant_id") @db.Uuid
+  bookId            String           @map("book_id") @db.Uuid
+  bookVersionId     String           @map("book_version_id") @db.Uuid
+  pageNumber        Int              @map("page_number")
+  extractionMethod  ExtractionMethod @map("extraction_method")
+  ocrModelVersionId String?          @map("ocr_model_version_id") @db.Uuid
+  confidence        Float?           @db.Real
+  charCount         Int              @map("char_count")
+  status            ParsedPageStatus
+  failureReasonCode String?          @map("failure_reason_code")
+  blockConfidence   Json?            @map("block_confidence") @db.JsonB
+  retryCount        Int              @default(0) @map("retry_count")
+  createdAt         DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime         @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  book            Book          @relation(fields: [bookId, tenantId], references: [id, tenantId], onDelete: Restrict)
+  bookVersion     BookVersion   @relation(fields: [bookVersionId], references: [id], onDelete: Cascade)
+  ocrModelVersion ModelVersion? @relation("ParsedPageOcrModel", fields: [ocrModelVersionId], references: [id], onDelete: Restrict)
+
+  paragraphs Paragraph[]
+
+  @@unique([bookVersionId, pageNumber])
+  @@map("parsed_page")
+}
+
+// =============================================================================
+// §9 — DOCUMENT STRUCTURE AND SOURCE PROVENANCE
+// =============================================================================
+
+/// §9.3. `UNIQUE (book_version_id, order_index)` is DEFERRABLE (§25.2) and is
+/// therefore declared in migration.sql, not here.
+model Chapter {
+  id                      String        @id @db.Uuid
+  tenantId                String        @map("tenant_id") @db.Uuid
+  bookId                  String        @map("book_id") @db.Uuid
+  bookVersionId           String        @map("book_version_id") @db.Uuid
+  orderIndex              Int           @map("order_index")
+  spineStart              Int           @map("spine_start")
+  spineEnd                Int           @map("spine_end")
+  title                   String?
+  matterType              MatterType    @map("matter_type")
+  canonicalTextStorageKey String?       @map("canonical_text_storage_key")
+  canonicalTextContentHash String?      @map("canonical_text_content_hash") @db.Char(64)
+  charCount               Int           @map("char_count")
+  textQcOutcome           TextQcOutcome? @map("text_qc_outcome")
+  rowVersion              Int           @default(0) @map("row_version")
+  createdAt               DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt               DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  book        Book        @relation(fields: [bookId, tenantId], references: [id, tenantId], onDelete: Restrict)
+  bookVersion BookVersion @relation(fields: [bookVersionId], references: [id], onDelete: Cascade)
+
+  sections             Section[]
+  scenes               Scene[]
+  paragraphs           Paragraph[]
+  narrativeStates      NarrativeState[]
+  charactersFirstAppearingHere Character[]  @relation("CharacterFirstAppearanceChapter")
+  charactersLastAppearingHere  Character[]  @relation("CharacterLastAppearanceChapter")
+  characterAliasScopes CharacterAlias[]     @relation("CharacterAliasScopeChapter")
+  pronunciationEntries PronunciationEntry[] @relation("PronunciationEntryAppliesToChapter")
+  audioScripts         AudioScript[]        @relation("AudioScriptScopeChapter")
+  audioScriptChunks    AudioScriptChunk[]
+  audioChunks          AudioChunk[]
+  chapterAudios        ChapterAudio[]
+  audiobookChapters    AudiobookChapter[]
+  audiobookRenditions  AudiobookRendition[]
+
+  @@unique([id, bookId])
+  @@index([bookVersionId, matterType])
+  @@map("chapter")
+}
+
+/// §9.3. Read-only in v1.
+model Section {
+  id            String   @id @db.Uuid
+  tenantId      String   @map("tenant_id") @db.Uuid
+  bookId        String   @map("book_id") @db.Uuid
+  bookVersionId String   @map("book_version_id") @db.Uuid
+  chapterId     String   @map("chapter_id") @db.Uuid
+  orderIndex    Int      @map("order_index")
+  spineStart    Int      @map("spine_start")
+  spineEnd      Int      @map("spine_end")
+  title         String?
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  book        Book        @relation(fields: [bookId, tenantId], references: [id, tenantId], onDelete: Restrict)
+  bookVersion BookVersion @relation(fields: [bookVersionId], references: [id], onDelete: Cascade)
+  chapter     Chapter     @relation(fields: [chapterId], references: [id], onDelete: Cascade)
+
+  scenes            Scene[]
+  paragraphs        Paragraph[]
+  audioScriptChunks AudioScriptChunk[]
+
+  @@map("section")
+}
+
+/// §9.3. Boundaries only — meaning lives in `scene_semantics` (§11.4). The
+/// never-cross-a-chapter rule is the two composite FKs into `paragraph (id, chapter_id)`.
+model Scene {
+  id               String   @id @db.Uuid
+  tenantId         String   @map("tenant_id") @db.Uuid
+  bookId           String   @map("book_id") @db.Uuid
+  bookVersionId    String   @map("book_version_id") @db.Uuid
+  chapterId        String   @map("chapter_id") @db.Uuid
+  sectionId        String?  @map("section_id") @db.Uuid
+  orderIndex       Int      @map("order_index")
+  startParagraphId String   @map("start_paragraph_id") @db.Uuid
+  endParagraphId   String   @map("end_paragraph_id") @db.Uuid
+  paragraphCount   Int      @map("paragraph_count")
+  spineStart       Int      @map("spine_start")
+  spineEnd         Int      @map("spine_end")
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  book           Book        @relation(fields: [bookId, tenantId], references: [id, tenantId], onDelete: Restrict)
+  bookVersion    BookVersion @relation(fields: [bookVersionId], references: [id], onDelete: Cascade)
+  chapter        Chapter     @relation(fields: [chapterId], references: [id], onDelete: Cascade)
+  section        Section?    @relation(fields: [sectionId], references: [id], onDelete: SetNull)
+  startParagraph Paragraph   @relation("SceneStartParagraph", fields: [startParagraphId, chapterId], references: [id, chapterId], onDelete: Cascade)
+  endParagraph   Paragraph   @relation("SceneEndParagraph", fields: [endParagraphId, chapterId], references: [id, chapterId], onDelete: Cascade)
+
+  paragraphs              Paragraph[]              @relation("ParagraphScene")
+  semantics               SceneSemantics[]
+  narrativeStates         NarrativeState[]
+  narrativeTimelineEvents NarrativeTimelineEvent[]
+  characterRelationships  CharacterRelationship[]  @relation("CharacterRelationshipEvidenceScene")
+  narrativeLocations      NarrativeLocation[]      @relation("NarrativeLocationEvidenceScene")
+  narrativeObjects        NarrativeObject[]        @relation("NarrativeObjectEvidenceScene")
+  narrativeFactions       NarrativeFaction[]       @relation("NarrativeFactionEvidenceScene")
+  narrativeThreads        NarrativeThread[]        @relation("NarrativeThreadEvidenceScene")
+  narrativeTimelineEventsEvidence NarrativeTimelineEvent[] @relation("NarrativeTimelineEventEvidenceScene")
+  audioScriptChunks       AudioScriptChunk[]
+  audioChunks             AudioChunk[]
+
+  @@map("scene")
+}
+
+/// §9.3, §9.4. The largest structural table. Immutable once scripted (§4.5):
+/// `scripted_at` is set by the first `audio_script_chunk_source` insert (§28.3).
+model Paragraph {
+  id            String  @id @db.Uuid
+  tenantId      String  @map("tenant_id") @db.Uuid
+  bookId        String  @map("book_id") @db.Uuid
+  bookVersionId String  @map("book_version_id") @db.Uuid
+  chapterId     String  @map("chapter_id") @db.Uuid
+  sectionId     String? @map("section_id") @db.Uuid
+  sceneId       String? @map("scene_id") @db.Uuid
+  orderIndex    Int     @map("order_index")
+  spinePosition Int     @map("spine_position")
+  text          String
+  contentHash   String  @map("content_hash") @db.Char(64)
+  charCount     Int     @map("char_count")
+  scriptedAt    DateTime? @map("scripted_at") @db.Timestamptz(6)
+
+  // §9.4 source provenance
+  sourcePageNumber     Int?             @map("source_page_number")
+  sourcePageEndNumber  Int?             @map("source_page_end_number")
+  sourceLocator        Json?            @map("source_locator") @db.JsonB
+  rawTextContentHash   String           @map("raw_text_content_hash") @db.Char(64)
+  extractionMethod     ExtractionMethod @map("extraction_method")
+  extractionConfidence Float?           @map("extraction_confidence") @db.Real
+  parsedPageId         String?          @map("parsed_page_id") @db.Uuid
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  book        Book        @relation(fields: [bookId, tenantId], references: [id, tenantId], onDelete: Restrict)
+  bookVersion BookVersion @relation(fields: [bookVersionId], references: [id], onDelete: Cascade)
+  chapter     Chapter     @relation(fields: [chapterId], references: [id], onDelete: Cascade)
+  section     Section?    @relation(fields: [sectionId], references: [id], onDelete: SetNull)
+  scene       Scene?      @relation("ParagraphScene", fields: [sceneId], references: [id], onDelete: SetNull)
+  parsedPage  ParsedPage? @relation(fields: [parsedPageId], references: [id], onDelete: SetNull)
+
+  scenesStartingHere Scene[]                  @relation("SceneStartParagraph")
+  scenesEndingHere   Scene[]                  @relation("SceneEndParagraph")
+  charactersFirstAppearingHere Character[]    @relation("CharacterFirstAppearanceParagraph")
+  charactersLastAppearingHere  Character[]    @relation("CharacterLastAppearanceParagraph")
+  voicePreviews      VoicePreview[]           @relation("VoicePreviewSourceParagraph")
+  chunkSources       AudioScriptChunkSource[]
+
+  @@unique([bookVersionId, spinePosition])
+  @@unique([id, chapterId])
+  @@unique([id, bookId])
+  @@index([chapterId, orderIndex])
+  @@index([bookVersionId, contentHash])
+  @@map("paragraph")
+}
+
+// =============================================================================
+// §10 — CHARACTER REGISTRY
+// =============================================================================
+
+/// §10.1. Book-scoped, not book-version-scoped (OQ-DB-4). Never deleted; a
+/// merged identity is retained with `status = MERGED_INTO`.
+model Character {
+  id          String            @id @db.Uuid
+  tenantId    String            @map("tenant_id") @db.Uuid
+  bookId      String            @map("book_id") @db.Uuid
+  displayName String            @map("display_name")
+  status      CharacterStatus
+
+  isSentinel   Boolean            @default(false) @map("is_sentinel")
+  sentinelKind CharacterSentinel? @map("sentinel_kind")
+
+  importanceRank  Int?    @map("importance_rank")
+  lineCount       Int     @default(0) @map("line_count")
+  speaking        Boolean @default(false)
+  narratorCapable Boolean @default(false) @map("narrator_capable")
+
+  pronounSets  Json? @map("pronoun_sets") @db.JsonB
+  speechTraits Json? @map("speech_traits") @db.JsonB
+
+  firstAppearanceBookVersionId String? @map("first_appearance_book_version_id") @db.Uuid
+  firstAppearanceChapterId     String? @map("first_appearance_chapter_id") @db.Uuid
+  firstAppearanceParagraphId   String? @map("first_appearance_paragraph_id") @db.Uuid
+  lastAppearanceBookVersionId  String? @map("last_appearance_book_version_id") @db.Uuid
+  lastAppearanceChapterId      String? @map("last_appearance_chapter_id") @db.Uuid
+  lastAppearanceParagraphId    String? @map("last_appearance_paragraph_id") @db.Uuid
+
+  detectionSource         DetectionSource? @map("detection_source")
+  detectedByModelVersionId String?         @map("detected_by_model_version_id") @db.Uuid
+  detectionConfidence     Float?           @map("detection_confidence") @db.Real
+  evidenceParagraphIds    String[]         @map("evidence_paragraph_ids") @db.Uuid
+
+  mergedIntoCharacterId String? @map("merged_into_character_id") @db.Uuid
+
+  rowVersion Int      @default(0) @map("row_version")
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt  DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  book Book @relation(fields: [bookId, tenantId], references: [id, tenantId], onDelete: Restrict)
+
+  firstAppearanceBookVersion BookVersion? @relation("CharacterFirstAppearanceBookVersion", fields: [firstAppearanceBookVersionId], references: [id], onDelete: Restrict)
+  firstAppearanceChapter     Chapter?     @relation("CharacterFirstAppearanceChapter", fields: [firstAppearanceChapterId], references: [id], onDelete: SetNull)
+  firstAppearanceParagraph   Paragraph?   @relation("CharacterFirstAppearanceParagraph", fields: [firstAppearanceParagraphId], references: [id], onDelete: SetNull)
+  lastAppearanceBookVersion  BookVersion? @relation("CharacterLastAppearanceBookVersion", fields: [lastAppearanceBookVersionId], references: [id], onDelete: Restrict)
+  lastAppearanceChapter      Chapter?     @relation("CharacterLastAppearanceChapter", fields: [lastAppearanceChapterId], references: [id], onDelete: SetNull)
+  lastAppearanceParagraph    Paragraph?   @relation("CharacterLastAppearanceParagraph", fields: [lastAppearanceParagraphId], references: [id], onDelete: SetNull)
+
+  detectedByModelVersion ModelVersion? @relation("CharacterDetectedByModel", fields: [detectedByModelVersionId], references: [id], onDelete: Restrict)
+
+  mergedIntoCharacter Character?  @relation("CharacterMergedInto", fields: [mergedIntoCharacterId], references: [id], onDelete: Restrict)
+  mergedFromCharacters Character[] @relation("CharacterMergedInto")
+
+  aliases                    CharacterAlias[]        @relation("CharacterAliases")
+  aliasSpeakerScopes         CharacterAlias[]        @relation("CharacterAliasScopeSpeaker")
+  mergesAsLoser              CharacterMerge[]        @relation("CharacterMergeLosing")
+  mergesAsWinner             CharacterMerge[]        @relation("CharacterMergeWinning")
+  relationshipsAsSource      CharacterRelationship[] @relation("CharacterRelationshipSource")
+  relationshipsAsTarget      CharacterRelationship[] @relation("CharacterRelationshipTarget")
+  sceneSemanticsAsPov        SceneSemantics[]        @relation("SceneSemanticsPovCharacter")
+  sceneParticipations        SceneParticipant[]
+  narrativeStatesAsPov       NarrativeState[]        @relation("NarrativeStatePovCharacter")
+  narrativeStatesAsPrevSpeaker NarrativeState[]      @relation("NarrativeStatePreviousSpeaker")
+  narrativeObjectCustody     NarrativeObject[]       @relation("NarrativeObjectCustody")
+  pronunciationEntries       PronunciationEntry[]    @relation("PronunciationEntryAppliesToCharacter")
+  voiceAssignments           VoiceAssignment[]
+  voicePreviews              VoicePreview[]
+  audioScriptChunks          AudioScriptChunk[]
+
+  @@unique([id, bookId])
+  @@index([bookId, importanceRank])
+  @@map("character")
+}
+
+/// §10.2. The ambiguity-refusal exclusion constraint over
+/// `(book_id, surface_form_normalized, scope_key, int4range(valid_from_spine, valid_to_spine))`
+/// and the generated `scope_key` column live in migration.sql — neither is
+/// expressible in Prisma.
+model CharacterAlias {
+  id                      String             @id @db.Uuid
+  tenantId                String             @map("tenant_id") @db.Uuid
+  bookId                  String             @map("book_id") @db.Uuid
+  characterId             String             @map("character_id") @db.Uuid
+  surfaceForm             String             @map("surface_form")
+  surfaceFormNormalized   String             @map("surface_form_normalized")
+  aliasType               CharacterAliasType @map("alias_type")
+  scopeKind               AliasScope         @map("scope_kind")
+  scopeChapterId          String?            @map("scope_chapter_id") @db.Uuid
+  scopeSpeakerCharacterId String?            @map("scope_speaker_character_id") @db.Uuid
+  validFromSpine          Int?               @map("valid_from_spine")
+  validToSpine            Int?               @map("valid_to_spine")
+  source                  ExtractionSource
+  detectedByModelVersionId String?           @map("detected_by_model_version_id") @db.Uuid
+  confidence              Float?             @db.Real
+  createdAt               DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt               DateTime           @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  book                   Book          @relation(fields: [bookId, tenantId], references: [id, tenantId], onDelete: Restrict)
+  character              Character     @relation("CharacterAliases", fields: [characterId], references: [id], onDelete: Cascade)
+  scopeChapter           Chapter?      @relation("CharacterAliasScopeChapter", fields: [scopeChapterId], references: [id], onDelete: Cascade)
+  scopeSpeakerCharacter  Character?    @relation("CharacterAliasScopeSpeaker", fields: [scopeSpeakerCharacterId], references: [id], onDelete: Restrict)
+  detectedByModelVersion ModelVersion? @relation("CharacterAliasDetectedByModel", fields: [detectedByModelVersionId], references: [id], onDelete: Restrict)
+
+  @@index([characterId])
+  @@index([bookId, surfaceFormNormalized])
+  @@map("character_alias")
+}
+
+/// §10.3. The auditable, reversible record of a merge or split.
+model CharacterMerge {
+  id                             String         @id @db.Uuid
+  tenantId                       String         @map("tenant_id") @db.Uuid
+  bookId                         String         @map("book_id") @db.Uuid
+  operation                      MergeOperation
+  losingCharacterId              String         @map("losing_character_id") @db.Uuid
+  winningCharacterId             String         @map("winning_character_id") @db.Uuid
+  voiceConflictResolution        Json?          @map("voice_conflict_resolution") @db.JsonB
+  rebindScope                    String         @map("rebind_scope")
+  aliasesMovedCount              Int            @default(0) @map("aliases_moved_count")
+  draftChunksReboundCount        Int            @default(0) @map("draft_chunks_rebound_count")
+  generatedChunksReversionedCount Int           @default(0) @map("generated_chunks_reversioned_count")
+  chaptersAffected               String[]       @map("chapters_affected") @db.Uuid
+  jobId                          String?        @map("job_id") @db.Uuid
+  performedByUserId              String         @map("performed_by_user_id") @db.Uuid
+  reversedAt                     DateTime?      @map("reversed_at") @db.Timestamptz(6)
+  reversedByMergeId              String?        @map("reversed_by_merge_id") @db.Uuid
+  createdAt                      DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt                      DateTime       @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  book             Book            @relation(fields: [bookId, tenantId], references: [id, tenantId], onDelete: Restrict)
+  losingCharacter  Character       @relation("CharacterMergeLosing", fields: [losingCharacterId], references: [id], onDelete: Restrict)
+  winningCharacter Character       @relation("CharacterMergeWinning", fields: [winningCharacterId], references: [id], onDelete: Restrict)
+  job              ProcessingJob?  @relation("CharacterMergeJob", fields: [jobId], references: [id], onDelete: SetNull)
+  performedByUser  User            @relation("CharacterMergePerformedBy", fields: [performedByUserId], references: [id], onDelete: Restrict)
+  reversedByMerge  CharacterMerge? @relation("CharacterMergeReversal", fields: [reversedByMergeId], references: [id], onDelete: Restrict)
+  reversalOf       CharacterMerge[] @relation("CharacterMergeReversal")
+
+  @@index([bookId, createdAt(sort: Desc)])
+  @@index([losingCharacterId])
+  @@map("character_merge")
+}
+
+/// §10.4. Owned by the Context Service; a flat, versioned edge list with
+/// validity ranges — deliberately not a temporal knowledge graph.
+model CharacterRelationship {
+  id                    String           @id @db.Uuid
+  tenantId              String           @map("tenant_id") @db.Uuid
+  bookId                String           @map("book_id") @db.Uuid
+  storyBibleVersionId   String           @map("story_bible_version_id") @db.Uuid
+  sourceCharacterId     String           @map("source_character_id") @db.Uuid
+  targetCharacterId     String           @map("target_character_id") @db.Uuid
+  relationshipType      RelationshipType @map("relationship_type")
+  label                 String?
+  directional           Boolean          @default(true)
+  confidence            Float            @db.Real
+  validFromSpine        Int?             @map("valid_from_spine")
+  validToSpine          Int?             @map("valid_to_spine")
+  evidenceParagraphIds  String[]         @map("evidence_paragraph_ids") @db.Uuid
+  evidenceSceneId       String?          @map("evidence_scene_id") @db.Uuid
+  extractedByModelVersionId String       @map("extracted_by_model_version_id") @db.Uuid
+  createdAt             DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt             DateTime         @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  book                   Book              @relation(fields: [bookId, tenantId], references: [id, tenantId], onDelete: Restrict)
+  storyBibleVersion      StoryBibleVersion @relation(fields: [storyBibleVersionId], references: [id], onDelete: Cascade)
+  sourceCharacter        Character         @relation("CharacterRelationshipSource", fields: [sourceCharacterId], references: [id], onDelete: Restrict)
+  targetCharacter        Character         @relation("CharacterRelationshipTarget", fields: [targetCharacterId], references: [id], onDelete: Restrict)
+  evidenceScene          Scene?            @relation("CharacterRelationshipEvidenceScene", fields: [evidenceSceneId], references: [id], onDelete: SetNull)
+  extractedByModelVersion ModelVersion     @relation("CharacterRelationshipExtractedByModel", fields: [extractedByModelVersionId], references: [id], onDelete: Restrict)
+
+  @@unique([storyBibleVersionId, sourceCharacterId, targetCharacterId, relationshipType, validFromSpine])
+  @@index([bookId, sourceCharacterId])
+  @@index([bookId, targetCharacterId])
+  @@map("character_relationship")
+}
+
+// =============================================================================
+// §11 — STORY BIBLE
+// =============================================================================
+
+/// §11.2. One row per book.
+model StoryBible {
+  bookId                String                  @id @map("book_id") @db.Uuid
+  tenantId              String                  @map("tenant_id") @db.Uuid
+  status                StoryBibleStatus
+  currentVersionId      String?                 @map("current_version_id") @db.Uuid
+  currentVersionNumber  Int?                    @map("current_version_number")
+  stale                 Boolean                 @default(false)
+  staleReasons          StoryBibleStaleReason[] @map("stale_reasons")
+  spinePositionAnalyzed Int?                    @map("spine_position_analyzed")
+  chaptersAnalyzed      Int                     @default(0) @map("chapters_analyzed")
+  chaptersTotal         Int                     @default(0) @map("chapters_total")
+  degraded              Boolean                 @default(false)
+  lastUpdatedAt         DateTime?               @map("last_updated_at") @db.Timestamptz(6)
+  rowVersion            Int                     @default(0) @map("row_version")
+  createdAt             DateTime                @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt             DateTime                @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  book           Book               @relation(fields: [bookId, tenantId], references: [id, tenantId], onDelete: Cascade)
+  currentVersion StoryBibleVersion? @relation("StoryBibleCurrentVersion", fields: [currentVersionId], references: [id], onDelete: SetNull)
+
+  @@unique([bookId, tenantId])
+  @@map("story_bible")
+}
+
+/// §11.3. The immutable snapshot a Director run pins to. Note: the document
+/// gives this chain `supersedes_story_bible_version_id` + `is_current` +
+/// `superseded_at` and no `superseded_by_*` column.
+model StoryBibleVersion {
+  id                            String              @id @db.Uuid
+  tenantId                      String              @map("tenant_id") @db.Uuid
+  bookId                        String              @map("book_id") @db.Uuid
+  bookVersionId                 String              @map("book_version_id") @db.Uuid
+  version                       Int
+  supersedesStoryBibleVersionId String?             @map("supersedes_story_bible_version_id") @db.Uuid
+  isCurrent                     Boolean             @default(false) @map("is_current")
+  supersededAt                  DateTime?           @map("superseded_at") @db.Timestamptz(6)
+  buildMode                     StoryBibleBuildMode @map("build_mode")
+  spinePositionCovered          Int?                @map("spine_position_covered")
+  chaptersCovered               Int                 @default(0) @map("chapters_covered")
+  builtByModelVersionId         String              @map("built_by_model_version_id") @db.Uuid
+  sourceContentHash             String              @map("source_content_hash") @db.Char(64)
+  factsContentHash              String              @map("facts_content_hash") @db.Char(64)
+  /// §11.6 — book-level POV type lives on this row.
+  povType                       PovType?            @map("pov_type")
+  degraded                      Boolean             @default(false)
+  degradedLayers                ContextLayer[]      @map("degraded_layers")
+  jobId                         String?             @map("job_id") @db.Uuid
+  createdAt                     DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt                     DateTime            @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  book                Book           @relation(fields: [bookId, tenantId], references: [id, tenantId], onDelete: Restrict)
+  bookVersion         BookVersion    @relation(fields: [bookVersionId], references: [id], onDelete: Restrict)
+  builtByModelVersion ModelVersion   @relation("StoryBibleVersionBuiltByModel", fields: [builtByModelVersionId], references: [id], onDelete: Restrict)
+  job                 ProcessingJob? @relation("StoryBibleVersionJob", fields: [jobId], references: [id], onDelete: SetNull)
+
+  supersedesStoryBibleVersion StoryBibleVersion?  @relation("StoryBibleVersionSupersedes", fields: [supersedesStoryBibleVersionId], references: [id], onDelete: Restrict)
+  supersededStoryBibleVersions StoryBibleVersion[] @relation("StoryBibleVersionSupersedes")
+
+  currentForStoryBibles   StoryBible[]             @relation("StoryBibleCurrentVersion")
+  characterRelationships  CharacterRelationship[]
+  sceneSemantics          SceneSemantics[]
+  narrativeStates         NarrativeState[]
+  narrativeLocations      NarrativeLocation[]
+  narrativeTimelineEvents NarrativeTimelineEvent[]
+  narrativeObjects        NarrativeObject[]
+  narrativeFactions       NarrativeFaction[]
+  narrativeThreads        NarrativeThread[]
+  narrativeSummaries      NarrativeSummary[]
+  narrativeEmbeddings     NarrativeEmbedding[]
+  audioScripts            AudioScript[]
+  audioScriptChunks       AudioScriptChunk[]
+  audioChunks             AudioChunk[]
+  audiobooks              Audiobook[]
+
+  @@unique([bookId, version])
+  @@unique([id, bookId])
+  @@index([bookVersionId])
+  @@map("story_bible_version")
+}
+
+/// §11.4. The Context Service's half of `Scene`. Scene semantics carry no JSONB —
+/// every field is queried, so every field is a column (§23.2).
+model SceneSemantics {
+  id                  String    @id @db.Uuid
+  tenantId            String    @map("tenant_id") @db.Uuid
+  bookId              String    @map("book_id") @db.Uuid
+  sceneId             String    @map("scene_id") @db.Uuid
+  storyBibleVersionId String    @map("story_bible_version_id") @db.Uuid
+  summary             String?
+  locationId          String?   @map("location_id") @db.Uuid
+  inStoryTime         String?   @map("in_story_time")
+  /// §24 names the type `scene_mood` but no upstream document enumerates its
+  /// members. Stored as text pending resolution — see prisma/README.md.
+  mood                String?
+  tension             Float?    @db.Real
+  povCharacterId      String?   @map("pov_character_id") @db.Uuid
+  narrativeStateId    String?   @map("narrative_state_id") @db.Uuid
+  extractedByModelVersionId String @map("extracted_by_model_version_id") @db.Uuid
+  confidence          Float     @db.Real
+  createdAt           DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt           DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  book                    Book               @relation(fields: [bookId, tenantId], references: [id, tenantId], onDelete: Restrict)
+  scene                   Scene              @relation(fields: [sceneId], references: [id], onDelete: Cascade)
+  storyBibleVersion       StoryBibleVersion  @relation(fields: [storyBibleVersionId], references: [id], onDelete: Cascade)
+  location                NarrativeLocation? @relation("SceneSemanticsLocation", fields: [locationId], references: [id], onDelete: SetNull)
+  povCharacter            Character?         @relation("SceneSemanticsPovCharacter", fields: [povCharacterId], references: [id], onDelete: Restrict)
+  narrativeState          NarrativeState?    @relation("SceneSemanticsNarrativeState", fields: [narrativeStateId], references: [id], onDelete: SetNull)
+  extractedByModelVersion ModelVersion       @relation("SceneSemanticsExtractedByModel", fields: [extractedByModelVersionId], references: [id], onDelete: Restrict)
+
+  participants SceneParticipant[]
+
+  @@unique([sceneId, storyBibleVersionId])
+  @@index([storyBibleVersionId, bookId])
+  @@map("scene_semantics")
+}
+
+/// §11.4 join table (D-18). "Scenes in which character X participates" is an API
+/// filter, so this is a join table and not an array.
+model SceneParticipant {
+  sceneSemanticsId    String   @map("scene_semantics_id") @db.Uuid
+  characterId         String   @map("character_id") @db.Uuid
+  speakingLineCount   Int      @default(0) @map("speaking_line_count")
+  firstSpinePosition  Int?     @map("first_spine_position")
+  createdAt           DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt           DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  sceneSemantics SceneSemantics @relation(fields: [sceneSemanticsId], references: [id], onDelete: Cascade)
+  character      Character      @relation(fields: [characterId], references: [id], onDelete: Restrict)
+
+  @@id([sceneSemanticsId, characterId])
+  @@index([characterId])
+  @@map("scene_participant")
+}
+
+/// §11.5. Fully immutable: no `updated_at`, no mutable column, no update path.
+model NarrativeState {
+  id                        String         @id @db.Uuid
+  tenantId                  String         @map("tenant_id") @db.Uuid
+  bookId                    String         @map("book_id") @db.Uuid
+  bookVersionId             String         @map("book_version_id") @db.Uuid
+  storyBibleVersionId       String         @map("story_bible_version_id") @db.Uuid
+  chapterId                 String         @map("chapter_id") @db.Uuid
+  sceneId                   String?        @map("scene_id") @db.Uuid
+  spinePosition             Int            @map("spine_position")
+  checkpointKind            CheckpointKind @map("checkpoint_kind")
+  povCharacterId            String?        @map("pov_character_id") @db.Uuid
+  povType                   PovType?       @map("pov_type")
+  presentCharacterIds       String[]       @map("present_character_ids") @db.Uuid
+  previousSpeakerCharacterId String?       @map("previous_speaker_character_id") @db.Uuid
+  emotionalRegister         String?        @map("emotional_register")
+  locationId                String?        @map("location_id") @db.Uuid
+  timelinePosition          String?        @map("timeline_position")
+  unresolvedThreadIds       String[]       @map("unresolved_thread_ids") @db.Uuid
+  openState                 Json?          @map("open_state") @db.JsonB
+  extractedByModelVersionId String         @map("extracted_by_model_version_id") @db.Uuid
+  createdAt                 DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  book                    Book               @relation(fields: [bookId, tenantId], references: [id, tenantId], onDelete: Restrict)
+  bookVersion             BookVersion        @relation(fields: [bookVersionId], references: [id], onDelete: Restrict)
+  storyBibleVersion       StoryBibleVersion  @relation(fields: [storyBibleVersionId], references: [id], onDelete: Restrict)
+  chapter                 Chapter            @relation(fields: [chapterId], references: [id], onDelete: Restrict)
+  scene                   Scene?             @relation(fields: [sceneId], references: [id], onDelete: SetNull)
+  povCharacter            Character?         @relation("NarrativeStatePovCharacter", fields: [povCharacterId], references: [id], onDelete: Restrict)
+  previousSpeakerCharacter Character?        @relation("NarrativeStatePreviousSpeaker", fields: [previousSpeakerCharacterId], references: [id], onDelete: Restrict)
+  location                NarrativeLocation? @relation("NarrativeStateLocation", fields: [locationId], references: [id], onDelete: SetNull)
+  extractedByModelVersion ModelVersion       @relation("NarrativeStateExtractedByModel", fields: [extractedByModelVersionId], references: [id], onDelete: Restrict)
+
+  sceneSemantics SceneSemantics[] @relation("SceneSemanticsNarrativeState")
+
+  @@unique([bookId, storyBibleVersionId, spinePosition])
+  @@index([bookId, chapterId, spinePosition])
+  @@map("narrative_state")
+}
+
+/// §11.6 fact table. Provenance is mandatory on every fact (§5.2).
+model NarrativeLocation {
+  id                        String   @id @db.Uuid
+  tenantId                  String   @map("tenant_id") @db.Uuid
+  bookId                    String   @map("book_id") @db.Uuid
+  storyBibleVersionId       String   @map("story_bible_version_id") @db.Uuid
+  name                      String
+  parentLocationId          String?  @map("parent_location_id") @db.Uuid
+  atmosphere                Json?    @db.JsonB
+  /// §11.6 names the column but no upstream document enumerates its members.
+  locationKind              String?  @map("location_kind")
+  firstSpinePosition        Int?     @map("first_spine_position")
+  lastSpinePosition         Int?     @map("last_spine_position")
+  evidenceParagraphIds      String[] @map("evidence_paragraph_ids") @db.Uuid
+  evidenceSceneId           String?  @map("evidence_scene_id") @db.Uuid
+  extractedByModelVersionId String   @map("extracted_by_model_version_id") @db.Uuid
+  confidence                Float    @db.Real
+  createdAt                 DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt                 DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  book                    Book              @relation(fields: [bookId, tenantId], references: [id, tenantId], onDelete: Restrict)
+  storyBibleVersion       StoryBibleVersion @relation(fields: [storyBibleVersionId], references: [id], onDelete: Cascade)
+  parentLocation          NarrativeLocation? @relation("NarrativeLocationHierarchy", fields: [parentLocationId], references: [id], onDelete: SetNull)
+  childLocations          NarrativeLocation[] @relation("NarrativeLocationHierarchy")
+  evidenceScene           Scene?            @relation("NarrativeLocationEvidenceScene", fields: [evidenceSceneId], references: [id], onDelete: SetNull)
+  extractedByModelVersion ModelVersion      @relation("NarrativeLocationExtractedByModel", fields: [extractedByModelVersionId], references: [id], onDelete: Restrict)
+
+  sceneSemantics  SceneSemantics[] @relation("SceneSemanticsLocation")
+  narrativeStates NarrativeState[] @relation("NarrativeStateLocation")
+
+  @@index([parentLocationId])
+  @@map("narrative_location")
+}
+
+/// §11.6 fact table.
+model NarrativeTimelineEvent {
+  id                        String   @id @db.Uuid
+  tenantId                  String   @map("tenant_id") @db.Uuid
+  bookId                    String   @map("book_id") @db.Uuid
+  storyBibleVersionId       String   @map("story_bible_version_id") @db.Uuid
+  title                     String
+  summary                   String?
+  ordinal                   Int
+  inStoryTimeMarker         String?  @map("in_story_time_marker")
+  spanKind                  SpanKind @map("span_kind")
+  sceneId                   String?  @map("scene_id") @db.Uuid
+  firstSpinePosition        Int?     @map("first_spine_position")
+  lastSpinePosition         Int?     @map("last_spine_position")
+  evidenceParagraphIds      String[] @map("evidence_paragraph_ids") @db.Uuid
+  evidenceSceneId           String?  @map("evidence_scene_id") @db.Uuid
+  extractedByModelVersionId String   @map("extracted_by_model_version_id") @db.Uuid
+  confidence                Float    @db.Real
+  createdAt                 DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt                 DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  book                    Book              @relation(fields: [bookId, tenantId], references: [id, tenantId], onDelete: Restrict)
+  storyBibleVersion       StoryBibleVersion @relation(fields: [storyBibleVersionId], references: [id], onDelete: Cascade)
+  scene                   Scene?            @relation(fields: [sceneId], references: [id], onDelete: SetNull)
+  evidenceScene           Scene?            @relation("NarrativeTimelineEventEvidenceScene", fields: [evidenceSceneId], references: [id], onDelete: SetNull)
+  extractedByModelVersion ModelVersion      @relation("NarrativeTimelineEventExtractedByModel", fields: [extractedByModelVersionId], references: [id], onDelete: Restrict)
+
+  @@unique([storyBibleVersionId, ordinal])
+  @@index([storyBibleVersionId, firstSpinePosition])
+  @@map("narrative_timeline_event")
+}
+
+/// §11.6 fact table.
+model NarrativeObject {
+  id                        String   @id @db.Uuid
+  tenantId                  String   @map("tenant_id") @db.Uuid
+  bookId                    String   @map("book_id") @db.Uuid
+  storyBibleVersionId       String   @map("story_bible_version_id") @db.Uuid
+  name                      String
+  significance              String?
+  custodyCharacterId        String?  @map("custody_character_id") @db.Uuid
+  attributes                Json?    @db.JsonB
+  firstSpinePosition        Int?     @map("first_spine_position")
+  lastSpinePosition         Int?     @map("last_spine_position")
+  evidenceParagraphIds      String[] @map("evidence_paragraph_ids") @db.Uuid
+  evidenceSceneId           String?  @map("evidence_scene_id") @db.Uuid
+  extractedByModelVersionId String   @map("extracted_by_model_version_id") @db.Uuid
+  confidence                Float    @db.Real
+  createdAt                 DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt                 DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  book                    Book              @relation(fields: [bookId, tenantId], references: [id, tenantId], onDelete: Restrict)
+  storyBibleVersion       StoryBibleVersion @relation(fields: [storyBibleVersionId], references: [id], onDelete: Cascade)
+  custodyCharacter        Character?        @relation("NarrativeObjectCustody", fields: [custodyCharacterId], references: [id], onDelete: Restrict)
+  evidenceScene           Scene?            @relation("NarrativeObjectEvidenceScene", fields: [evidenceSceneId], references: [id], onDelete: SetNull)
+  extractedByModelVersion ModelVersion      @relation("NarrativeObjectExtractedByModel", fields: [extractedByModelVersionId], references: [id], onDelete: Restrict)
+
+  @@map("narrative_object")
+}
+
+/// §11.6 fact table.
+model NarrativeFaction {
+  id                        String   @id @db.Uuid
+  tenantId                  String   @map("tenant_id") @db.Uuid
+  bookId                    String   @map("book_id") @db.Uuid
+  storyBibleVersionId       String   @map("story_bible_version_id") @db.Uuid
+  name                      String
+  summary                   String?
+  allegianceFactionId       String?  @map("allegiance_faction_id") @db.Uuid
+  attributes                Json?    @db.JsonB
+  firstSpinePosition        Int?     @map("first_spine_position")
+  lastSpinePosition         Int?     @map("last_spine_position")
+  evidenceParagraphIds      String[] @map("evidence_paragraph_ids") @db.Uuid
+  evidenceSceneId           String?  @map("evidence_scene_id") @db.Uuid
+  extractedByModelVersionId String   @map("extracted_by_model_version_id") @db.Uuid
+  confidence                Float    @db.Real
+  createdAt                 DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt                 DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  book                    Book              @relation(fields: [bookId, tenantId], references: [id, tenantId], onDelete: Restrict)
+  storyBibleVersion       StoryBibleVersion @relation(fields: [storyBibleVersionId], references: [id], onDelete: Cascade)
+  allegianceFaction       NarrativeFaction? @relation("NarrativeFactionAllegiance", fields: [allegianceFactionId], references: [id], onDelete: SetNull)
+  alliedFactions          NarrativeFaction[] @relation("NarrativeFactionAllegiance")
+  evidenceScene           Scene?            @relation("NarrativeFactionEvidenceScene", fields: [evidenceSceneId], references: [id], onDelete: SetNull)
+  extractedByModelVersion ModelVersion      @relation("NarrativeFactionExtractedByModel", fields: [extractedByModelVersionId], references: [id], onDelete: Restrict)
+
+  @@map("narrative_faction")
+}
+
+/// §11.6 fact table.
+model NarrativeThread {
+  id                        String                @id @db.Uuid
+  tenantId                  String                @map("tenant_id") @db.Uuid
+  bookId                    String                @map("book_id") @db.Uuid
+  storyBibleVersionId       String                @map("story_bible_version_id") @db.Uuid
+  kind                      NarrativeThreadKind
+  summary                   String?
+  knownToCharacterIds       String[]              @map("known_to_character_ids") @db.Uuid
+  openedSpinePosition       Int                   @map("opened_spine_position")
+  resolvedSpinePosition     Int?                  @map("resolved_spine_position")
+  status                    NarrativeThreadStatus
+  firstSpinePosition        Int?                  @map("first_spine_position")
+  lastSpinePosition         Int?                  @map("last_spine_position")
+  evidenceParagraphIds      String[]              @map("evidence_paragraph_ids") @db.Uuid
+  evidenceSceneId           String?               @map("evidence_scene_id") @db.Uuid
+  extractedByModelVersionId String                @map("extracted_by_model_version_id") @db.Uuid
+  confidence                Float                 @db.Real
+  createdAt                 DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt                 DateTime              @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  book                    Book              @relation(fields: [bookId, tenantId], references: [id, tenantId], onDelete: Restrict)
+  storyBibleVersion       StoryBibleVersion @relation(fields: [storyBibleVersionId], references: [id], onDelete: Cascade)
+  evidenceScene           Scene?            @relation("NarrativeThreadEvidenceScene", fields: [evidenceSceneId], references: [id], onDelete: SetNull)
+  extractedByModelVersion ModelVersion      @relation("NarrativeThreadExtractedByModel", fields: [extractedByModelVersionId], references: [id], onDelete: Restrict)
+
+  @@map("narrative_thread")
+}
+
+/// §11.7. Immutable except `stale`. `target_id` is deliberately not a foreign
+/// key — it is polymorphic across summary levels (§11.7).
+model NarrativeSummary {
+  id                       String       @id @db.Uuid
+  tenantId                 String       @map("tenant_id") @db.Uuid
+  bookId                   String       @map("book_id") @db.Uuid
+  storyBibleVersionId      String       @map("story_bible_version_id") @db.Uuid
+  level                    SummaryLevel
+  targetId                 String       @map("target_id") @db.Uuid
+  targetContentHash        String       @map("target_content_hash") @db.Char(64)
+  bodyPreview              String       @map("body_preview")
+  bodyStorageKey           String?      @map("body_storage_key")
+  tokenCount               Int?         @map("token_count")
+  generatedByModelVersionId String      @map("generated_by_model_version_id") @db.Uuid
+  stale                    Boolean      @default(false)
+  createdAt                DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt                DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  book                    Book              @relation(fields: [bookId, tenantId], references: [id, tenantId], onDelete: Restrict)
+  storyBibleVersion       StoryBibleVersion @relation(fields: [storyBibleVersionId], references: [id], onDelete: Cascade)
+  generatedByModelVersion ModelVersion      @relation("NarrativeSummaryGeneratedByModel", fields: [generatedByModelVersionId], references: [id], onDelete: Restrict)
+
+  @@unique([storyBibleVersionId, level, targetId])
+  @@map("narrative_summary")
+}
+
+/// §11.8. `embedding` is a pgvector column — not a Prisma type (§36).
+/// The HNSW index is created in migration.sql.
+model NarrativeEmbedding {
+  id                      String              @id @db.Uuid
+  tenantId                String              @map("tenant_id") @db.Uuid
+  bookId                  String              @map("book_id") @db.Uuid
+  storyBibleVersionId     String              @map("story_bible_version_id") @db.Uuid
+  sourceKind              EmbeddingSourceKind @map("source_kind")
+  sourceId                String              @map("source_id") @db.Uuid
+  sourceContentHash       String              @map("source_content_hash") @db.Char(64)
+  /// TODO: OQ-DB-12 — embedding dimension not fixed by any architecture doc yet.
+  /// 1536 is a PLACEHOLDER. A dimension change is a table rewrite and is Breaking (§11.8).
+  embedding               Unsupported("vector(1536)")?
+  embeddingModelVersionId String              @map("embedding_model_version_id") @db.Uuid
+  createdAt               DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt               DateTime            @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  book                 Book              @relation(fields: [bookId, tenantId], references: [id, tenantId], onDelete: Restrict)
+  storyBibleVersion    StoryBibleVersion @relation(fields: [storyBibleVersionId], references: [id], onDelete: Cascade)
+  embeddingModelVersion ModelVersion     @relation("NarrativeEmbeddingModel", fields: [embeddingModelVersionId], references: [id], onDelete: Restrict)
+
+  @@unique([storyBibleVersionId, sourceKind, sourceId, embeddingModelVersionId])
+  @@index([bookId, storyBibleVersionId])
+  @@map("narrative_embedding")
+}
+
+/// §11.9. Book-scoped, not story-bible-version-scoped: user data must survive a
+/// Story Bible rebuild (OQ-DB-4).
+model PronunciationEntry {
+  id                    String             @id @db.Uuid
+  tenantId              String             @map("tenant_id") @db.Uuid
+  bookId                String             @map("book_id") @db.Uuid
+  surfaceForm           String             @map("surface_form")
+  surfaceFormNormalized String             @map("surface_form_normalized")
+  lexiconKey            String?            @map("lexicon_key")
+  ipa                   String?
+  appliesTo             PronunciationScope @map("applies_to")
+  appliesToCharacterId  String?            @map("applies_to_character_id") @db.Uuid
+  appliesToChapterId    String?            @map("applies_to_chapter_id") @db.Uuid
+  notes                 String?
+  source                ExtractionSource
+  createdByUserId       String?            @map("created_by_user_id") @db.Uuid
+  rowVersion            Int                @default(0) @map("row_version")
+  createdAt             DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt             DateTime           @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  book               Book       @relation(fields: [bookId, tenantId], references: [id, tenantId], onDelete: Cascade)
+  appliesToCharacter Character? @relation("PronunciationEntryAppliesToCharacter", fields: [appliesToCharacterId], references: [id], onDelete: Restrict)
+  appliesToChapter   Chapter?   @relation("PronunciationEntryAppliesToChapter", fields: [appliesToChapterId], references: [id], onDelete: Cascade)
+  createdByUser      User?      @relation("PronunciationEntryCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict)
+
+  @@unique([bookId, surfaceFormNormalized, appliesTo])
+  @@unique([bookId, lexiconKey])
+  @@map("pronunciation_entry")
+}
+
+// =============================================================================
+// §12 — VOICE REGISTRY
+// =============================================================================
+
+/// §12.1. `SYSTEM` profiles are the only rows in this schema with a null
+/// `tenant_id` (OQ-DB-3). Because `tenant_id` and `book_id` are both nullable
+/// here, this table uses single-column FKs rather than the §4.1 composite.
+model VoiceProfile {
+  id                            String            @id @db.Uuid
+  scope                         VoiceProfileScope
+  tenantId                      String?           @map("tenant_id") @db.Uuid
+  bookId                        String?           @map("book_id") @db.Uuid
+  name                          String
+  description                   String?
+  activeVersionId               String?           @map("active_version_id") @db.Uuid
+  activeVersionNumber           Int?              @map("active_version_number")
+  versionCount                  Int               @default(0) @map("version_count")
+  lockState                     VoiceLockState    @default(UNLOCKED) @map("lock_state")
+  intendedCharacterIds          String[]          @map("intended_character_ids") @db.Uuid
+  snapshottedFromSystemProfileId String?          @map("snapshotted_from_system_profile_id") @db.Uuid
+  createdByUserId               String            @map("created_by_user_id") @db.Uuid
+  rowVersion                    Int               @default(0) @map("row_version")
+  createdAt                     DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt                     DateTime          @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt                     DateTime?         @map("deleted_at") @db.Timestamptz(6)
+
+  tenant        Tenant? @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  book          Book?   @relation(fields: [bookId], references: [id], onDelete: Restrict)
+  createdByUser User    @relation("VoiceProfileCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict)
+
+  snapshottedFromSystemProfile VoiceProfile?  @relation("VoiceProfileSystemSnapshot", fields: [snapshottedFromSystemProfileId], references: [id], onDelete: Restrict)
+  systemSnapshots              VoiceProfile[] @relation("VoiceProfileSystemSnapshot")
+
+  activeVersion VoiceProfileVersion? @relation("VoiceProfileActiveVersion", fields: [activeVersionId], references: [id], onDelete: SetNull)
+
+  versions          VoiceProfileVersion[] @relation("VoiceProfileVersions")
+  assignments       VoiceAssignment[]     @relation("VoiceAssignmentProfile")
+  assignmentSnapshots VoiceAssignment[]   @relation("VoiceAssignmentSystemSnapshot")
+  previews          VoicePreview[]
+  audioScriptChunks AudioScriptChunk[]
+  ttsJobs           TtsJob[]
+  audioChunks       AudioChunk[]
+
+  @@map("voice_profile")
+}
+
+/// §12.2. Immutable once used; a `LOCKED` version is immutable forever (§32.2).
+/// The document gives this chain `supersedes_version_id` + `superseded_at` and
+/// NO `is_current` / `superseded_by_*` — currency is `voice_profile.active_version_id`.
+model VoiceProfileVersion {
+  id              String  @id @db.Uuid
+  tenantId        String? @map("tenant_id") @db.Uuid
+  voiceProfileId  String  @map("voice_profile_id") @db.Uuid
+  version         Int
+  supersedesVersionId String? @map("supersedes_version_id") @db.Uuid
+  supersededAt    DateTime? @map("superseded_at") @db.Timestamptz(6)
+
+  // Engine binding
+  ttsProviderId      String   @map("tts_provider_id")
+  ttsModelId         String   @map("tts_model_id")
+  ttsModelVersionId  String   @map("tts_model_version_id") @db.Uuid
+  language           String
+  supportedLanguages String[] @map("supported_languages")
+
+  // Parameters
+  baseGenerationParams     Json   @map("base_generation_params") @db.JsonB
+  baseGenerationParamsHash String @map("base_generation_params_hash") @db.Char(64)
+  defaultPitch             Float? @map("default_pitch") @db.Real
+  defaultVolume            Float? @map("default_volume") @db.Real
+  defaultPacing            Float? @map("default_pacing") @db.Real
+
+  // Speaker reference
+  referenceAudioStorageKey  String?   @map("reference_audio_storage_key")
+  referenceAudioContentHash String?   @map("reference_audio_content_hash") @db.Char(64)
+  referenceAudioDurationMs  Int?      @map("reference_audio_duration_ms")
+  referenceAudioVerifiedAt  DateTime? @map("reference_audio_verified_at") @db.Timestamptz(6)
+
+  // Embedding
+  embeddingStorageKey              String?   @map("embedding_storage_key")
+  embeddingContentHash             String?   @map("embedding_content_hash") @db.Char(64)
+  embeddingExtractorModelVersionId String?   @map("embedding_extractor_model_version_id") @db.Uuid
+  embeddingExtractedAt             DateTime? @map("embedding_extracted_at") @db.Timestamptz(6)
+
+  // Capability
+  emotionCapabilityMap Json? @map("emotion_capability_map") @db.JsonB
+
+  // Lifecycle
+  approvalState   VoiceApprovalState @map("approval_state")
+  approvedByUserId String?           @map("approved_by_user_id") @db.Uuid
+  approvedAt      DateTime?          @map("approved_at") @db.Timestamptz(6)
+  lockState       VoiceLockState     @default(UNLOCKED) @map("lock_state")
+  lockedAt        DateTime?          @map("locked_at") @db.Timestamptz(6)
+  lockedReason    VoiceLockReason?   @map("locked_reason")
+  retiredAt       DateTime?          @map("retired_at") @db.Timestamptz(6)
+
+  // Consent (§9.3 rule 6 — an unattested row is unrepresentable, see the CHECK in migration.sql)
+  consentAttested          Boolean        @map("consent_attested")
+  consentSubject           ConsentSubject @map("consent_subject")
+  consentAttestationText   String?        @map("consent_attestation_text")
+  consentAttestedByUserId  String         @map("consent_attested_by_user_id") @db.Uuid
+  consentAttestedAt        DateTime       @map("consent_attested_at") @db.Timestamptz(6)
+
+  // Provenance / identity
+  referenceProvenance  ReferenceProvenance @map("reference_provenance")
+  derivedFromVersionId String?             @map("derived_from_version_id") @db.Uuid
+  identityFingerprint  String              @map("identity_fingerprint") @db.Char(64)
+  createdByUserId      String              @map("created_by_user_id") @db.Uuid
+  createdAt            DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt            DateTime            @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  tenant       Tenant?      @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  voiceProfile VoiceProfile @relation("VoiceProfileVersions", fields: [voiceProfileId], references: [id], onDelete: Restrict)
+
+  supersedesVersion  VoiceProfileVersion?  @relation("VoiceProfileVersionSupersedes", fields: [supersedesVersionId], references: [id], onDelete: Restrict)
+  supersededVersions VoiceProfileVersion[] @relation("VoiceProfileVersionSupersedes")
+  derivedFromVersion VoiceProfileVersion?  @relation("VoiceProfileVersionDerivedFrom", fields: [derivedFromVersionId], references: [id], onDelete: Restrict)
+  derivedVersions    VoiceProfileVersion[] @relation("VoiceProfileVersionDerivedFrom")
+
+  ttsModelVersion               ModelVersion  @relation("VoiceProfileVersionTtsModel", fields: [ttsModelVersionId], references: [id], onDelete: Restrict)
+  embeddingExtractorModelVersion ModelVersion? @relation("VoiceProfileVersionEmbeddingExtractorModel", fields: [embeddingExtractorModelVersionId], references: [id], onDelete: Restrict)
+
+  approvedByUser        User? @relation("VoiceProfileVersionApprovedBy", fields: [approvedByUserId], references: [id], onDelete: Restrict)
+  consentAttestedByUser User  @relation("VoiceProfileVersionConsentAttestedBy", fields: [consentAttestedByUserId], references: [id], onDelete: Restrict)
+  createdByUser         User  @relation("VoiceProfileVersionCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict)
+
+  activeForProfiles VoiceProfile[]     @relation("VoiceProfileActiveVersion")
+  assignments       VoiceAssignment[]
+  previews          VoicePreview[]
+  audioScriptChunks AudioScriptChunk[]
+  ttsJobs           TtsJob[]
+  audioChunks       AudioChunk[]
+
+  @@unique([voiceProfileId, version])
+  @@unique([voiceProfileId, identityFingerprint])
+  @@index([voiceProfileId, approvalState])
+  @@index([ttsModelVersionId])
+  @@map("voice_profile_version")
+}
+
+/// §12.3. History is retained: reassignment deactivates and inserts, never
+/// updates in place. `UNIQUE (book_id, character_id, role) WHERE is_active`
+/// lives in migration.sql.
+model VoiceAssignment {
+  id                             String              @id @db.Uuid
+  tenantId                       String              @map("tenant_id") @db.Uuid
+  bookId                         String              @map("book_id") @db.Uuid
+  characterId                    String              @map("character_id") @db.Uuid
+  voiceProfileId                 String              @map("voice_profile_id") @db.Uuid
+  voiceProfileVersionId          String              @map("voice_profile_version_id") @db.Uuid
+  role                           VoiceAssignmentRole
+  isActive                       Boolean             @default(true) @map("is_active")
+  assignedByUserId               String              @map("assigned_by_user_id") @db.Uuid
+  assignedAt                     DateTime            @map("assigned_at") @db.Timestamptz(6)
+  deactivatedAt                  DateTime?           @map("deactivated_at") @db.Timestamptz(6)
+  supersededByAssignmentId       String?             @map("superseded_by_assignment_id") @db.Uuid
+  snapshottedFromSystemProfileId String?             @map("snapshotted_from_system_profile_id") @db.Uuid
+  createdAt                      DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt                      DateTime            @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  book                Book                @relation(fields: [bookId, tenantId], references: [id, tenantId], onDelete: Restrict)
+  character           Character           @relation(fields: [characterId], references: [id], onDelete: Restrict)
+  voiceProfile        VoiceProfile        @relation("VoiceAssignmentProfile", fields: [voiceProfileId], references: [id], onDelete: Restrict)
+  voiceProfileVersion VoiceProfileVersion @relation(fields: [voiceProfileVersionId], references: [id], onDelete: Restrict)
+  assignedByUser      User                @relation("VoiceAssignmentAssignedBy", fields: [assignedByUserId], references: [id], onDelete: Restrict)
+
+  supersededByAssignment VoiceAssignment?  @relation("VoiceAssignmentSupersede", fields: [supersededByAssignmentId], references: [id], onDelete: Restrict)
+  supersedesAssignments  VoiceAssignment[] @relation("VoiceAssignmentSupersede")
+
+  snapshottedFromSystemProfile VoiceProfile? @relation("VoiceAssignmentSystemSnapshot", fields: [snapshottedFromSystemProfileId], references: [id], onDelete: Restrict)
+
+  @@index([voiceProfileVersionId])
+  @@map("voice_assignment")
+}
+
+/// §12.4. Previews are cheap, disposable, and outside every audiobook lineage:
+/// no production artifact has a foreign key to this table, by design.
+model VoicePreview {
+  id                    String             @id @db.Uuid
+  tenantId              String             @map("tenant_id") @db.Uuid
+  voiceProfileId        String             @map("voice_profile_id") @db.Uuid
+  voiceProfileVersionId String             @map("voice_profile_version_id") @db.Uuid
+  bookId                String?            @map("book_id") @db.Uuid
+  characterId           String?            @map("character_id") @db.Uuid
+  sourceParagraphId     String?            @map("source_paragraph_id") @db.Uuid
+  textExcerpt           String             @map("text_excerpt")
+  emotion               Emotion
+  capabilityGap         Json?              @map("capability_gap") @db.JsonB
+  status                VoicePreviewStatus
+  durationMs            Int?               @map("duration_ms")
+  sampleRate            Int?               @map("sample_rate")
+  ttsModelVersionId     String             @map("tts_model_version_id") @db.Uuid
+  generationParamsHash  String             @map("generation_params_hash") @db.Char(64)
+  seed                  BigInt?
+  jobId                 String?            @map("job_id") @db.Uuid
+  errorCode             String?            @map("error_code")
+  errorMessage          String?            @map("error_message")
+  expiresAt             DateTime           @map("expires_at") @db.Timestamptz(6)
+
+  // §4.4 storage reference group
+  storageKey       String?      @map("storage_key")
+  storageBucket    String?      @map("storage_bucket")
+  contentHash      String?      @map("content_hash") @db.Char(64)
+  sizeBytes        BigInt?      @map("size_bytes")
+  objectVerifiedAt DateTime?    @map("object_verified_at") @db.Timestamptz(6)
+  storageClass     StorageClass @default(STANDARD) @map("storage_class")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  tenant              Tenant              @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  voiceProfile        VoiceProfile        @relation(fields: [voiceProfileId], references: [id], onDelete: Restrict)
+  voiceProfileVersion VoiceProfileVersion @relation(fields: [voiceProfileVersionId], references: [id], onDelete: Restrict)
+  book                Book?               @relation(fields: [bookId], references: [id], onDelete: Restrict)
+  character           Character?          @relation(fields: [characterId], references: [id], onDelete: Restrict)
+  sourceParagraph     Paragraph?          @relation("VoicePreviewSourceParagraph", fields: [sourceParagraphId], references: [id], onDelete: SetNull)
+  ttsModelVersion     ModelVersion        @relation("VoicePreviewTtsModel", fields: [ttsModelVersionId], references: [id], onDelete: Restrict)
+  job                 ProcessingJob?      @relation("VoicePreviewJob", fields: [jobId], references: [id], onDelete: SetNull)
+
+  @@index([voiceProfileVersionId, createdAt(sort: Desc)])
+  @@map("voice_preview")
+}
+
+// =============================================================================
+// §13 — AUDIO SCRIPT IR
+// =============================================================================
+
+/// §13.1. The Director run output for a scope — and it IS the version (D-2).
+model AudioScript {
+  id            String            @id @db.Uuid
+  tenantId      String            @map("tenant_id") @db.Uuid
+  bookId        String            @map("book_id") @db.Uuid
+  bookVersionId String            @map("book_version_id") @db.Uuid
+  scope         AudioScriptScope
+  scopeChapterId String?          @map("scope_chapter_id") @db.Uuid
+
+  version                   Int
+  supersedesAudioScriptId   String?   @map("supersedes_audio_script_id") @db.Uuid
+  supersededByAudioScriptId String?   @map("superseded_by_audio_script_id") @db.Uuid
+  isCurrent                 Boolean   @default(false) @map("is_current")
+  supersededAt              DateTime? @map("superseded_at") @db.Timestamptz(6)
+
+  schemaVersion          String @map("schema_version")
+  directorVersion        String @map("director_version")
+  directorModelVersionId String @map("director_model_version_id") @db.Uuid
+
+  storyBibleVersionId   String @map("story_bible_version_id") @db.Uuid
+  sourceContentHash     String @map("source_content_hash") @db.Char(64)
+  structureVersionLabel String @map("structure_version_label")
+  /// §20.1 — the context bundle hash recorded on the script as a whole.
+  contextBundleHash     String? @map("context_bundle_hash") @db.Char(64)
+
+  chunkCount       Int    @default(0) @map("chunk_count")
+  totalCharacters  Int    @default(0) @map("total_characters")
+  estimatedAudioMs BigInt @default(0) @map("estimated_audio_ms")
+
+  state                  AudioScriptState
+  validation             Json?            @db.JsonB
+  coverageVerified       Boolean          @default(false) @map("coverage_verified")
+  coverageGapCount       Int              @default(0) @map("coverage_gap_count")
+  coverageOverlapCount   Int              @default(0) @map("coverage_overlap_count")
+  unknownSpeakerRate     Float?           @map("unknown_speaker_rate") @db.Real
+  fallbackAppliedCount   Int              @default(0) @map("fallback_applied_count")
+  lowConfidenceChunkCount Int             @default(0) @map("low_confidence_chunk_count")
+
+  jobId     String?  @map("job_id") @db.Uuid
+  degraded  Boolean  @default(false)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  book              Book              @relation("BookAudioScripts", fields: [bookId, tenantId], references: [id, tenantId], onDelete: Restrict)
+  bookVersion       BookVersion       @relation(fields: [bookVersionId], references: [id], onDelete: Restrict)
+  scopeChapter      Chapter?          @relation("AudioScriptScopeChapter", fields: [scopeChapterId], references: [id], onDelete: Restrict)
+  storyBibleVersion StoryBibleVersion @relation(fields: [storyBibleVersionId], references: [id], onDelete: Restrict)
+  directorModelVersion ModelVersion   @relation("AudioScriptDirectorModel", fields: [directorModelVersionId], references: [id], onDelete: Restrict)
+  job               ProcessingJob?    @relation("AudioScriptJob", fields: [jobId], references: [id], onDelete: SetNull)
+
+  supersedesAudioScript   AudioScript?  @relation("AudioScriptSupersedes", fields: [supersedesAudioScriptId], references: [id], onDelete: Restrict)
+  supersededAudioScripts  AudioScript[] @relation("AudioScriptSupersedes")
+  supersededByAudioScript AudioScript?  @relation("AudioScriptSupersededBy", fields: [supersededByAudioScriptId], references: [id], onDelete: Restrict)
+  supersedingAudioScripts AudioScript[] @relation("AudioScriptSupersededBy")
+
+  currentForBooks Book[]             @relation("BookCurrentAudioScript")
+  chunks          AudioScriptChunk[]
+
+  @@unique([bookId, version])
+  @@unique([id, bookId])
+  @@index([bookVersionId])
+  @@index([storyBibleVersionId])
+  @@map("audio_script")
+}
+
+/// §13.2. The highest-cardinality table and the centre of the lineage graph.
+/// `has_review_flags` is `GENERATED ALWAYS AS ... STORED` and therefore is NOT
+/// declared here — it is added in migration.sql (§23.3, §36).
+model AudioScriptChunk {
+  id             String  @id @db.Uuid
+  tenantId       String  @map("tenant_id") @db.Uuid
+  bookId         String  @map("book_id") @db.Uuid
+  audioScriptId  String  @map("audio_script_id") @db.Uuid
+  chapterId      String  @map("chapter_id") @db.Uuid
+  sectionId      String? @map("section_id") @db.Uuid
+  sceneId        String? @map("scene_id") @db.Uuid
+
+  sequenceIndex        Int @map("sequence_index")
+  chapterSequenceIndex Int @map("chapter_sequence_index")
+
+  version              Int
+  supersedesChunkId    String?   @map("supersedes_chunk_id") @db.Uuid
+  supersededByChunkId  String?   @map("superseded_by_chunk_id") @db.Uuid
+  isCurrent            Boolean   @default(false) @map("is_current")
+  supersededAt         DateTime? @map("superseded_at") @db.Timestamptz(6)
+
+  // Lineage — immutable from creation
+  sourceContentHash      String  @map("source_content_hash") @db.Char(64)
+  schemaVersion          String  @map("schema_version")
+  directorVersion        String  @map("director_version")
+  directorModelVersionId String  @map("director_model_version_id") @db.Uuid
+  contextBundleHash      String  @map("context_bundle_hash") @db.Char(64)
+  storyBibleVersionId    String  @map("story_bible_version_id") @db.Uuid
+
+  // Content — immutable from creation
+  text                     String
+  spokenText               String? @map("spoken_text")
+  language                 String
+  script                   String?
+  spokenTextSubstitutions  Json?   @map("spoken_text_substitutions") @db.JsonB
+
+  // Performance — frozen at LOCKED
+  speakerType         SpeakerType  @map("speaker_type")
+  characterId         String?      @map("character_id") @db.Uuid
+  isDialogue          Boolean      @default(false) @map("is_dialogue")
+  deliveryMode        DeliveryMode @map("delivery_mode")
+  emotion             Emotion
+  emotionIntensity    Float        @map("emotion_intensity") @db.Real
+  pacing              Float        @db.Real
+  pitch               Float        @db.Real
+  volume              Float        @db.Real
+  pauses              Json?        @db.JsonB
+  emphasis            Json?        @db.JsonB
+  pronunciationHints  Json?        @map("pronunciation_hints") @db.JsonB
+  nonVerbal           Json?        @map("non_verbal") @db.JsonB
+
+  // Voice binding — frozen at LOCKED
+  voiceProfileId        String? @map("voice_profile_id") @db.Uuid
+  voiceProfileVersionId String? @map("voice_profile_version_id") @db.Uuid
+
+  // Generation control — frozen at LOCKED
+  ttsProviderId        String? @map("tts_provider_id")
+  generationParams     Json?   @map("generation_params") @db.JsonB
+  generationParamsHash String? @map("generation_params_hash") @db.Char(64)
+  seed                 BigInt?
+  targetSampleRate     Int?    @map("target_sample_rate")
+  targetChannels       Int?    @map("target_channels")
+
+  // Quality — annotations, not contract
+  confidence          Float        @db.Real
+  decisionConfidence  Json?        @map("decision_confidence") @db.JsonB
+  reviewFlags         ReviewFlag[] @map("review_flags")
+  fallbackApplied     Boolean      @default(false) @map("fallback_applied")
+  fallbackReason      String?      @map("fallback_reason")
+  capabilityGaps      Json?        @map("capability_gaps") @db.JsonB
+  continuity          Json?        @db.JsonB
+
+  // Provenance / review (IR-11)
+  origin            ChunkOrigin @default(AUTO_GENERATED)
+  directorOriginal  Json?       @map("director_original") @db.JsonB
+  override          Json?       @db.JsonB
+
+  // Lifecycle
+  state               AudioScriptChunkState
+  lockedAt            DateTime?             @map("locked_at") @db.Timestamptz(6)
+  currentAudioChunkId String?               @map("current_audio_chunk_id") @db.Uuid
+
+  rowVersion Int      @default(0) @map("row_version")
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt  DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  book                 Book                 @relation(fields: [bookId, tenantId], references: [id, tenantId], onDelete: Restrict)
+  audioScript          AudioScript          @relation(fields: [audioScriptId], references: [id], onDelete: Restrict)
+  chapter              Chapter              @relation(fields: [chapterId], references: [id], onDelete: Restrict)
+  section              Section?             @relation(fields: [sectionId], references: [id], onDelete: SetNull)
+  scene                Scene?               @relation(fields: [sceneId], references: [id], onDelete: SetNull)
+  character            Character?           @relation(fields: [characterId], references: [id], onDelete: Restrict)
+  voiceProfile         VoiceProfile?        @relation(fields: [voiceProfileId], references: [id], onDelete: Restrict)
+  voiceProfileVersion  VoiceProfileVersion? @relation(fields: [voiceProfileVersionId], references: [id], onDelete: Restrict)
+  directorModelVersion ModelVersion         @relation("AudioScriptChunkDirectorModel", fields: [directorModelVersionId], references: [id], onDelete: Restrict)
+  storyBibleVersion    StoryBibleVersion    @relation(fields: [storyBibleVersionId], references: [id], onDelete: Restrict)
+  currentAudioChunk    AudioChunk?          @relation("AudioScriptChunkCurrentAudio", fields: [currentAudioChunkId], references: [id], onDelete: SetNull)
+
+  supersedesChunk   AudioScriptChunk?  @relation("AudioScriptChunkSupersedes", fields: [supersedesChunkId], references: [id], onDelete: Restrict)
+  supersededChunks  AudioScriptChunk[] @relation("AudioScriptChunkSupersedes")
+  supersededByChunk AudioScriptChunk?  @relation("AudioScriptChunkSupersededBy", fields: [supersededByChunkId], references: [id], onDelete: Restrict)
+  supersedingChunks AudioScriptChunk[] @relation("AudioScriptChunkSupersededBy")
+
+  sources     AudioScriptChunkSource[]
+  ttsJobs     TtsJob[]
+  audioChunks AudioChunk[]             @relation("AudioChunkScriptChunk")
+
+  @@unique([bookId, id])
+  @@unique([id, characterId])
+  @@index([sourceContentHash])
+  @@map("audio_script_chunk")
+}
+
+/// §13.3 join table (D-18). The index that answers "which Audio Script chunk did
+/// this source content produce?". `ON DELETE RESTRICT` on `paragraph_id` is what
+/// makes "Paragraph is immutable once scripted" physical (§26.2).
+model AudioScriptChunkSource {
+  audioScriptChunkId  String   @map("audio_script_chunk_id") @db.Uuid
+  orderIndex          Int      @map("order_index")
+  paragraphId         String   @map("paragraph_id") @db.Uuid
+  bookId              String   @map("book_id") @db.Uuid
+  paragraphCharStart  Int      @map("paragraph_char_start")
+  paragraphCharEnd    Int      @map("paragraph_char_end")
+  createdAt           DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt           DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  audioScriptChunk AudioScriptChunk @relation(fields: [audioScriptChunkId], references: [id], onDelete: Cascade)
+  paragraph        Paragraph        @relation(fields: [paragraphId], references: [id], onDelete: Restrict)
+  book             Book             @relation(fields: [bookId], references: [id], onDelete: Restrict)
+
+  @@id([audioScriptChunkId, orderIndex])
+  @@index([paragraphId])
+  @@index([bookId, paragraphId])
+  @@map("audio_script_chunk_source")
+}
+
+// =============================================================================
+// §16 — AUDIO PRODUCTION ARTIFACTS
+// =============================================================================
+
+/// §16.1. `UNIQUE (dedupe_key)` is the physical answer to duplicate synthesis.
+model TtsJob {
+  id                        String       @id @db.Uuid
+  tenantId                  String       @map("tenant_id") @db.Uuid
+  bookId                    String       @map("book_id") @db.Uuid
+  audioScriptChunkId        String       @map("audio_script_chunk_id") @db.Uuid
+  audioScriptChunkVersion   Int          @map("audio_script_chunk_version")
+  processingJobId           String?      @map("processing_job_id") @db.Uuid
+  ttsProviderId             String       @map("tts_provider_id")
+  ttsModelVersionId         String       @map("tts_model_version_id") @db.Uuid
+  voiceProfileId            String       @map("voice_profile_id") @db.Uuid
+  voiceProfileVersionId     String       @map("voice_profile_version_id") @db.Uuid
+  generationParams          Json         @map("generation_params") @db.JsonB
+  generationParamsHash      String       @map("generation_params_hash") @db.Char(64)
+  seed                      BigInt?
+  targetSampleRate          Int          @map("target_sample_rate")
+  targetChannels            Int          @map("target_channels")
+  status                    TtsJobStatus
+  dedupeKey                 String       @unique @map("dedupe_key") @db.Char(64)
+  forced                    Boolean      @default(false)
+  forceToken                String?      @map("force_token")
+  audioChunkId              String?      @map("audio_chunk_id") @db.Uuid
+  durationMs                Int?         @map("duration_ms")
+  generationTimeMs          Int?         @map("generation_time_ms")
+  capabilityGaps            Json?        @map("capability_gaps") @db.JsonB
+  errorCode                 String?      @map("error_code")
+  createdAt                 DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  startedAt                 DateTime?    @map("started_at") @db.Timestamptz(6)
+  completedAt               DateTime?    @map("completed_at") @db.Timestamptz(6)
+  updatedAt                 DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  book                Book                @relation(fields: [bookId, tenantId], references: [id, tenantId], onDelete: Restrict)
+  audioScriptChunk    AudioScriptChunk    @relation(fields: [audioScriptChunkId], references: [id], onDelete: Restrict)
+  processingJob       ProcessingJob?      @relation("TtsJobProcessingJob", fields: [processingJobId], references: [id], onDelete: SetNull)
+  ttsModelVersion     ModelVersion        @relation("TtsJobTtsModel", fields: [ttsModelVersionId], references: [id], onDelete: Restrict)
+  voiceProfile        VoiceProfile        @relation(fields: [voiceProfileId], references: [id], onDelete: Restrict)
+  voiceProfileVersion VoiceProfileVersion @relation(fields: [voiceProfileVersionId], references: [id], onDelete: Restrict)
+  resultAudioChunk    AudioChunk?         @relation("TtsJobResultAudioChunk", fields: [audioChunkId], references: [id], onDelete: SetNull)
+
+  audioChunks AudioChunk[] @relation("AudioChunkTtsJob")
+
+  @@index([audioScriptChunkId, createdAt(sort: Desc)])
+  @@index([processingJobId])
+  @@map("tts_job")
+}
+
+/// §16.2. Metadata only — the bytes are in object storage.
+/// `has_capability_gap` is `GENERATED ALWAYS AS ... STORED` and is added in
+/// migration.sql, not here. The composite FK
+/// `(audio_script_chunk_id, character_id) -> audio_script_chunk (id, character_id)`
+/// is also in migration.sql: Prisma cannot express a composite relation whose
+/// fields differ in nullability.
+model AudioChunk {
+  id                 String  @id @db.Uuid
+  tenantId           String  @map("tenant_id") @db.Uuid
+  bookId             String  @map("book_id") @db.Uuid
+  audioScriptChunkId String  @map("audio_script_chunk_id") @db.Uuid
+  ttsJobId           String  @map("tts_job_id") @db.Uuid
+  chapterId          String  @map("chapter_id") @db.Uuid
+  sceneId            String? @map("scene_id") @db.Uuid
+  characterId        String? @map("character_id") @db.Uuid
+  sequenceIndex      Int     @map("sequence_index")
+
+  generationVersion         Int       @map("generation_version")
+  supersedesAudioChunkId    String?   @map("supersedes_audio_chunk_id") @db.Uuid
+  supersededByAudioChunkId  String?   @map("superseded_by_audio_chunk_id") @db.Uuid
+  isCurrent                 Boolean   @default(false) @map("is_current")
+  supersededAt              DateTime? @map("superseded_at") @db.Timestamptz(6)
+
+  status          AudioChunkStatus
+  statusChangedAt DateTime         @map("status_changed_at") @db.Timestamptz(6)
+
+  // Lineage — the full §2.4 tuple, written once at insert
+  sourceContentHash          String  @map("source_content_hash") @db.Char(64)
+  audioScriptIrSchemaVersion String  @map("audio_script_ir_schema_version")
+  directorVersion            String  @map("director_version")
+  directorModelVersionId     String  @map("director_model_version_id") @db.Uuid
+  voiceProfileId             String  @map("voice_profile_id") @db.Uuid
+  voiceProfileVersionId      String  @map("voice_profile_version_id") @db.Uuid
+  ttsProviderId              String  @map("tts_provider_id")
+  ttsModelVersionId          String  @map("tts_model_version_id") @db.Uuid
+  generationParamsHash       String  @map("generation_params_hash") @db.Char(64)
+  seed                       BigInt?
+  pipelineVersion            String  @map("pipeline_version")
+  bookVersionId              String  @map("book_version_id") @db.Uuid
+  storyBibleVersionId        String  @map("story_bible_version_id") @db.Uuid
+
+  // Technical
+  format         AudioFormat
+  durationMs     Int         @map("duration_ms")
+  sampleRate     Int         @map("sample_rate")
+  channels       Int
+  peakDbfs       Float?      @map("peak_dbfs") @db.Real
+  truePeakDbtp   Float?      @map("true_peak_dbtp") @db.Real
+  integratedLufs Float?      @map("integrated_lufs") @db.Real
+  rmsDbfs        Float?      @map("rms_dbfs") @db.Real
+
+  // Validation
+  validationStatus  ValidationStatus @default(PENDING) @map("validation_status")
+  validation        Json?            @db.JsonB
+  asrSampled        Boolean          @default(false) @map("asr_sampled")
+  asrWer            Float?           @map("asr_wer") @db.Real
+  asrModelVersionId String?          @map("asr_model_version_id") @db.Uuid
+  asrOutcome        String?          @map("asr_outcome")
+
+  capabilityGaps Json? @map("capability_gaps") @db.JsonB
+
+  // §4.4 storage reference group
+  storageKey       String       @map("storage_key")
+  storageBucket    String       @map("storage_bucket")
+  contentHash      String       @map("content_hash") @db.Char(64)
+  sizeBytes        BigInt?      @map("size_bytes")
+  objectVerifiedAt DateTime?    @map("object_verified_at") @db.Timestamptz(6)
+  storageClass     StorageClass @default(STANDARD) @map("storage_class")
+
+  errorCode    String? @map("error_code")
+  errorClass   String? @map("error_class")
+  errorMessage String? @map("error_message")
+  failingCheck String? @map("failing_check")
+  attemptCount Int     @default(0) @map("attempt_count")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  book                 Book                @relation(fields: [bookId, tenantId], references: [id, tenantId], onDelete: Restrict)
+  audioScriptChunk     AudioScriptChunk    @relation("AudioChunkScriptChunk", fields: [audioScriptChunkId], references: [id], onDelete: Restrict)
+  ttsJob               TtsJob              @relation("AudioChunkTtsJob", fields: [ttsJobId], references: [id], onDelete: Restrict)
+  chapter              Chapter             @relation(fields: [chapterId], references: [id], onDelete: Restrict)
+  scene                Scene?              @relation(fields: [sceneId], references: [id], onDelete: SetNull)
+  bookVersion          BookVersion         @relation(fields: [bookVersionId], references: [id], onDelete: Restrict)
+  storyBibleVersion    StoryBibleVersion   @relation(fields: [storyBibleVersionId], references: [id], onDelete: Restrict)
+  voiceProfile         VoiceProfile        @relation(fields: [voiceProfileId], references: [id], onDelete: Restrict)
+  voiceProfileVersion  VoiceProfileVersion @relation(fields: [voiceProfileVersionId], references: [id], onDelete: Restrict)
+  directorModelVersion ModelVersion        @relation("AudioChunkDirectorModel", fields: [directorModelVersionId], references: [id], onDelete: Restrict)
+  ttsModelVersion      ModelVersion        @relation("AudioChunkTtsModel", fields: [ttsModelVersionId], references: [id], onDelete: Restrict)
+  asrModelVersion      ModelVersion?       @relation("AudioChunkAsrModel", fields: [asrModelVersionId], references: [id], onDelete: Restrict)
+
+  supersedesAudioChunk   AudioChunk?  @relation("AudioChunkSupersedes", fields: [supersedesAudioChunkId], references: [id], onDelete: Restrict)
+  supersededAudioChunks  AudioChunk[] @relation("AudioChunkSupersedes")
+  supersededByAudioChunk AudioChunk?  @relation("AudioChunkSupersededBy", fields: [supersededByAudioChunkId], references: [id], onDelete: Restrict)
+  supersedingAudioChunks AudioChunk[] @relation("AudioChunkSupersededBy")
+
+  currentForScriptChunks AudioScriptChunk[]   @relation("AudioScriptChunkCurrentAudio")
+  resultOfTtsJobs        TtsJob[]             @relation("TtsJobResultAudioChunk")
+  chapterAudioMembers    ChapterAudioMember[]
+
+  @@unique([bookId, id])
+  @@index([ttsModelVersionId])
+  @@index([ttsJobId])
+  @@map("audio_chunk")
+}
+
+/// §16.3. The assembled per-chapter track.
+model ChapterAudio {
+  id        String @id @db.Uuid
+  tenantId  String @map("tenant_id") @db.Uuid
+  bookId    String @map("book_id") @db.Uuid
+  chapterId String @map("chapter_id") @db.Uuid
+
+  version                     Int
+  supersedesChapterAudioId    String?   @map("supersedes_chapter_audio_id") @db.Uuid
+  supersededByChapterAudioId  String?   @map("superseded_by_chapter_audio_id") @db.Uuid
+  isCurrent                   Boolean   @default(false) @map("is_current")
+  supersededAt                DateTime? @map("superseded_at") @db.Timestamptz(6)
+  isPreviewBuild              Boolean   @default(false) @map("is_preview_build")
+
+  status                   ChapterAudioStatus
+  durationMs               Int                @map("duration_ms")
+  chunkCount               Int                @map("chunk_count")
+  chunkManifestHash        String             @map("chunk_manifest_hash") @db.Char(64)
+  format                   AudioFormat
+  integratedLufs           Float?             @map("integrated_lufs") @db.Real
+  truePeakDbtp             Float?             @map("true_peak_dbtp") @db.Real
+  validation               Json?              @db.JsonB
+  voiceConsistencyVerified Boolean            @default(false) @map("voice_consistency_verified")
+  voiceConsistency         Json?              @map("voice_consistency") @db.JsonB
+  directorVersion          String             @map("director_version")
+  pipelineVersion          String             @map("pipeline_version")
+  audioToolModelVersionId  String             @map("audio_tool_model_version_id") @db.Uuid
+  assemblyVersion          String             @map("assembly_version")
+  jobId                    String?            @map("job_id") @db.Uuid
+
+  // §4.4 storage reference group
+  storageKey       String       @map("storage_key")
+  storageBucket    String       @map("storage_bucket")
+  contentHash      String       @map("content_hash") @db.Char(64)
+  sizeBytes        BigInt?      @map("size_bytes")
+  objectVerifiedAt DateTime?    @map("object_verified_at") @db.Timestamptz(6)
+  storageClass     StorageClass @default(STANDARD) @map("storage_class")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  book                  Book           @relation(fields: [bookId, tenantId], references: [id, tenantId], onDelete: Restrict)
+  chapter               Chapter        @relation(fields: [chapterId], references: [id], onDelete: Restrict)
+  audioToolModelVersion ModelVersion   @relation("ChapterAudioAudioToolModel", fields: [audioToolModelVersionId], references: [id], onDelete: Restrict)
+  job                   ProcessingJob? @relation("ChapterAudioJob", fields: [jobId], references: [id], onDelete: SetNull)
+
+  supersedesChapterAudio   ChapterAudio?  @relation("ChapterAudioSupersedes", fields: [supersedesChapterAudioId], references: [id], onDelete: Restrict)
+  supersededChapterAudios  ChapterAudio[] @relation("ChapterAudioSupersedes")
+  supersededByChapterAudio ChapterAudio?  @relation("ChapterAudioSupersededBy", fields: [supersededByChapterAudioId], references: [id], onDelete: Restrict)
+  supersedingChapterAudios ChapterAudio[] @relation("ChapterAudioSupersededBy")
+
+  members           ChapterAudioMember[]
+  audiobookChapters AudiobookChapter[]
+
+  @@unique([chapterId, version])
+  @@index([bookId, status])
+  @@map("chapter_audio")
+}
+
+/// §16.4 join table (D-18). The ordered chunk manifest.
+model ChapterAudioMember {
+  chapterAudioId        String   @map("chapter_audio_id") @db.Uuid
+  orderIndex            Int      @map("order_index")
+  audioChunkId          String   @map("audio_chunk_id") @db.Uuid
+  bookId                String   @map("book_id") @db.Uuid
+  startMs               Int      @map("start_ms")
+  durationMs            Int      @map("duration_ms")
+  leadSilenceTrimmedMs  Int      @default(0) @map("lead_silence_trimmed_ms")
+  pauseAppliedMs        Int      @default(0) @map("pause_applied_ms")
+  createdAt             DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt             DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  chapterAudio ChapterAudio @relation(fields: [chapterAudioId], references: [id], onDelete: Cascade)
+  audioChunk   AudioChunk   @relation(fields: [audioChunkId], references: [id], onDelete: Restrict)
+  book         Book         @relation(fields: [bookId], references: [id], onDelete: Restrict)
+
+  @@id([chapterAudioId, orderIndex])
+  @@unique([chapterAudioId, audioChunkId])
+  @@index([audioChunkId])
+  @@map("chapter_audio_member")
+}
+
+/// §16.5. One immutable, versioned, final deliverable.
+model Audiobook {
+  id            String @id @db.Uuid
+  tenantId      String @map("tenant_id") @db.Uuid
+  bookId        String @map("book_id") @db.Uuid
+  bookVersionId String @map("book_version_id") @db.Uuid
+
+  version                 Int
+  supersedesAudiobookId   String?   @map("supersedes_audiobook_id") @db.Uuid
+  supersededByAudiobookId String?   @map("superseded_by_audiobook_id") @db.Uuid
+  isCurrent               Boolean   @default(false) @map("is_current")
+  supersededAt            DateTime? @map("superseded_at") @db.Timestamptz(6)
+  isPreviewBuild          Boolean   @default(false) @map("is_preview_build")
+
+  status AudiobookStatus
+
+  containerFormat String @map("container_format")
+  durationMs      Int    @map("duration_ms")
+  chapterCount    Int    @map("chapter_count")
+
+  // Embedded metadata, snapshotted at assembly
+  metadataTitle           String  @map("metadata_title")
+  metadataAuthor          String? @map("metadata_author")
+  metadataNarratorCredit  String? @map("metadata_narrator_credit")
+  aiNarrationDisclosed    Boolean @default(true) @map("ai_narration_disclosed")
+  metadataSeries          String? @map("metadata_series")
+  metadataSeriesIndex     Int?    @map("metadata_series_index")
+  metadataPublisher       String? @map("metadata_publisher")
+  metadataLanguage        String  @map("metadata_language")
+  metadataPublicationYear Int?    @map("metadata_publication_year")
+  metadataDescription     String? @map("metadata_description")
+
+  audiobookCoverId String? @map("audiobook_cover_id") @db.Uuid
+
+  bookWer       Float? @map("book_wer") @db.Real
+  chunksFlagged Int    @default(0) @map("chunks_flagged")
+  asrCoverage   Float? @map("asr_coverage") @db.Real
+
+  pipelineVersion         String   @map("pipeline_version")
+  directorVersion         String   @map("director_version")
+  ttsModelVersionIds      String[] @map("tts_model_version_ids") @db.Uuid
+  audioToolModelVersionId String   @map("audio_tool_model_version_id") @db.Uuid
+  sourceContentHash       String   @map("source_content_hash") @db.Char(64)
+  storyBibleVersionId     String   @map("story_bible_version_id") @db.Uuid
+  chapterManifestHash     String   @map("chapter_manifest_hash") @db.Char(64)
+
+  jobId String? @map("job_id") @db.Uuid
+
+  // §4.4 storage reference group (primary container)
+  storageKey       String       @map("storage_key")
+  storageBucket    String       @map("storage_bucket")
+  contentHash      String       @map("content_hash") @db.Char(64)
+  sizeBytes        BigInt?      @map("size_bytes")
+  objectVerifiedAt DateTime?    @map("object_verified_at") @db.Timestamptz(6)
+  storageClass     StorageClass @default(STANDARD) @map("storage_class")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  book                  Book              @relation("BookAudiobooks", fields: [bookId, tenantId], references: [id, tenantId], onDelete: Restrict)
+  bookVersion           BookVersion       @relation(fields: [bookVersionId], references: [id], onDelete: Restrict)
+  storyBibleVersion     StoryBibleVersion @relation(fields: [storyBibleVersionId], references: [id], onDelete: Restrict)
+  audioToolModelVersion ModelVersion      @relation("AudiobookAudioToolModel", fields: [audioToolModelVersionId], references: [id], onDelete: Restrict)
+  job                   ProcessingJob?    @relation("AudiobookJob", fields: [jobId], references: [id], onDelete: SetNull)
+  cover                 AudiobookCover?   @relation("AudiobookSelectedCover", fields: [audiobookCoverId], references: [id], onDelete: SetNull)
+
+  supersedesAudiobook   Audiobook?  @relation("AudiobookSupersedes", fields: [supersedesAudiobookId], references: [id], onDelete: Restrict)
+  supersededAudiobooks  Audiobook[] @relation("AudiobookSupersedes")
+  supersededByAudiobook Audiobook?  @relation("AudiobookSupersededBy", fields: [supersededByAudiobookId], references: [id], onDelete: Restrict)
+  supersedingAudiobooks Audiobook[] @relation("AudiobookSupersededBy")
+
+  currentForBooks   Book[]               @relation("BookCurrentAudiobook")
+  chapters          AudiobookChapter[]
+  renditions        AudiobookRendition[]
+  covers            AudiobookCover[]     @relation("AudiobookCovers")
+
+  @@unique([bookId, version])
+  @@index([bookId, createdAt(sort: Desc)])
+  @@index([bookVersionId])
+  @@map("audiobook")
+}
+
+/// §16.6 join table (D-18). The ordered chapter manifest with markers.
+model AudiobookChapter {
+  audiobookId    String   @map("audiobook_id") @db.Uuid
+  orderIndex     Int      @map("order_index")
+  chapterId      String   @map("chapter_id") @db.Uuid
+  chapterAudioId String   @map("chapter_audio_id") @db.Uuid
+  bookId         String   @map("book_id") @db.Uuid
+  title          String?
+  startMs        Int      @map("start_ms")
+  durationMs     Int      @map("duration_ms")
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  audiobook    Audiobook    @relation(fields: [audiobookId], references: [id], onDelete: Cascade)
+  chapter      Chapter      @relation(fields: [chapterId], references: [id], onDelete: Restrict)
+  chapterAudio ChapterAudio @relation(fields: [chapterAudioId], references: [id], onDelete: Restrict)
+  book         Book         @relation(fields: [bookId], references: [id], onDelete: Restrict)
+
+  @@id([audiobookId, orderIndex])
+  @@unique([audiobookId, chapterId])
+  @@index([chapterAudioId])
+  @@map("audiobook_chapter")
+}
+
+/// §16.7. One encoded delivery artifact. `MP3_PER_CHAPTER` is n objects, which a
+/// single `storage_key` on `audiobook` cannot express.
+model AudiobookRendition {
+  id                      String         @id @db.Uuid
+  tenantId                String         @map("tenant_id") @db.Uuid
+  bookId                  String         @map("book_id") @db.Uuid
+  audiobookId             String         @map("audiobook_id") @db.Uuid
+  format                  DeliveryFormat
+  chapterId               String?        @map("chapter_id") @db.Uuid
+  bitrateKbps             Int            @map("bitrate_kbps")
+  sampleRate              Int            @map("sample_rate")
+  channels                Int
+  durationMs              Int            @map("duration_ms")
+  audioToolModelVersionId String         @map("audio_tool_model_version_id") @db.Uuid
+  encodeParams            Json?          @map("encode_params") @db.JsonB
+  /// §16.7 lists a `status` column but names no enum type for it, and §24 has no
+  /// entry. Stored as text pending resolution — see prisma/README.md.
+  status                  String
+  jobId                   String?        @map("job_id") @db.Uuid
+
+  // §4.4 storage reference group
+  storageKey       String       @map("storage_key")
+  storageBucket    String       @map("storage_bucket")
+  contentHash      String       @map("content_hash") @db.Char(64)
+  sizeBytes        BigInt?      @map("size_bytes")
+  objectVerifiedAt DateTime?    @map("object_verified_at") @db.Timestamptz(6)
+  storageClass     StorageClass @default(STANDARD) @map("storage_class")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  book                  Book           @relation(fields: [bookId, tenantId], references: [id, tenantId], onDelete: Restrict)
+  audiobook             Audiobook      @relation(fields: [audiobookId], references: [id], onDelete: Cascade)
+  chapter               Chapter?       @relation(fields: [chapterId], references: [id], onDelete: Restrict)
+  audioToolModelVersion ModelVersion   @relation("AudiobookRenditionAudioToolModel", fields: [audioToolModelVersionId], references: [id], onDelete: Restrict)
+  job                   ProcessingJob? @relation("AudiobookRenditionJob", fields: [jobId], references: [id], onDelete: SetNull)
+
+  @@index([audiobookId])
+  @@map("audiobook_rendition")
+}
+
+/// §16.8. Separate from `audiobook` because a cover is an uploaded binary with
+/// its own validation lifecycle (allowlist, dimension bounds, EXIF stripping).
+model AudiobookCover {
+  id               String    @id @db.Uuid
+  tenantId         String    @map("tenant_id") @db.Uuid
+  bookId           String    @map("book_id") @db.Uuid
+  audiobookId      String    @map("audiobook_id") @db.Uuid
+  width            Int
+  height           Int
+  mimeType         String    @map("mime_type")
+  exifStrippedAt   DateTime? @map("exif_stripped_at") @db.Timestamptz(6)
+  uploadedByUserId String    @map("uploaded_by_user_id") @db.Uuid
+
+  // §4.4 storage reference group
+  storageKey       String        @map("storage_key")
+  storageBucket    String        @map("storage_bucket")
+  contentHash      String        @map("content_hash") @db.Char(64)
+  contentHashAlgorithm HashAlgorithm @map("content_hash_algorithm")
+  sizeBytes        BigInt?       @map("size_bytes")
+  objectVerifiedAt DateTime?     @map("object_verified_at") @db.Timestamptz(6)
+  storageClass     StorageClass  @default(STANDARD) @map("storage_class")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  book           Book      @relation(fields: [bookId, tenantId], references: [id, tenantId], onDelete: Restrict)
+  audiobook      Audiobook @relation("AudiobookCovers", fields: [audiobookId], references: [id], onDelete: Cascade)
+  uploadedByUser User      @relation("AudiobookCoverUploadedBy", fields: [uploadedByUserId], references: [id], onDelete: Restrict)
+
+  selectedByAudiobooks Audiobook[] @relation("AudiobookSelectedCover")
+
+  @@map("audiobook_cover")
+}
+
+// =============================================================================
+// §14 — MODEL REGISTRY AND VERSION PINNING
+// =============================================================================
+
+/// §14.2. Platform data, not tenant-scoped.
+model ModelRegistry {
+  id          String              @id @db.Uuid
+  role        ModelRole
+  providerId  String              @map("provider_id")
+  modelId     String              @map("model_id")
+  displayName String              @map("display_name")
+  licenceNote String?             @map("licence_note")
+  status      ModelRegistryStatus
+  createdAt   DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime            @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  versions ModelVersion[]
+
+  @@unique([role, providerId, modelId])
+  @@map("model_registry")
+}
+
+/// §14.3. Fully immutable except `deprecated_at`, `quarantined_at`,
+/// `quarantine_reason`. Never deleted — `ON DELETE RESTRICT` from everything.
+model ModelVersion {
+  id                 String    @id @db.Uuid
+  modelRegistryId    String    @map("model_registry_id") @db.Uuid
+  version            String
+  paramsFingerprint  String    @map("params_fingerprint") @db.Char(64)
+  config             Json?     @db.JsonB
+  weightsStorageKey  String?   @map("weights_storage_key")
+  weightsContentHash String?   @map("weights_content_hash") @db.Char(64)
+  releasedAt         DateTime  @map("released_at") @db.Timestamptz(6)
+  deprecatedAt       DateTime? @map("deprecated_at") @db.Timestamptz(6)
+  quarantinedAt      DateTime? @map("quarantined_at") @db.Timestamptz(6)
+  quarantineReason   String?   @map("quarantine_reason")
+  createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  modelRegistry ModelRegistry @relation(fields: [modelRegistryId], references: [id], onDelete: Restrict)
+
+  // §14.4 — what references a model version
+  bookVersionsAsParser       BookVersion[]            @relation("BookVersionParserModel")
+  bookVersionsAsOcr          BookVersion[]            @relation("BookVersionOcrModel")
+  bookVersionsAsNormalizer   BookVersion[]            @relation("BookVersionNormalizerModel")
+  parsedPagesAsOcr           ParsedPage[]             @relation("ParsedPageOcrModel")
+  charactersDetected         Character[]              @relation("CharacterDetectedByModel")
+  characterAliasesDetected   CharacterAlias[]         @relation("CharacterAliasDetectedByModel")
+  characterRelationships     CharacterRelationship[]  @relation("CharacterRelationshipExtractedByModel")
+  storyBibleVersionsBuilt    StoryBibleVersion[]      @relation("StoryBibleVersionBuiltByModel")
+  sceneSemanticsExtracted    SceneSemantics[]         @relation("SceneSemanticsExtractedByModel")
+  narrativeStatesExtracted   NarrativeState[]         @relation("NarrativeStateExtractedByModel")
+  narrativeLocations         NarrativeLocation[]      @relation("NarrativeLocationExtractedByModel")
+  narrativeTimelineEvents    NarrativeTimelineEvent[] @relation("NarrativeTimelineEventExtractedByModel")
+  narrativeObjects           NarrativeObject[]        @relation("NarrativeObjectExtractedByModel")
+  narrativeFactions          NarrativeFaction[]       @relation("NarrativeFactionExtractedByModel")
+  narrativeThreads           NarrativeThread[]        @relation("NarrativeThreadExtractedByModel")
+  narrativeSummaries         NarrativeSummary[]       @relation("NarrativeSummaryGeneratedByModel")
+  narrativeEmbeddings        NarrativeEmbedding[]     @relation("NarrativeEmbeddingModel")
+  voiceProfileVersionsAsTts  VoiceProfileVersion[]    @relation("VoiceProfileVersionTtsModel")
+  voiceProfileVersionsAsExtractor VoiceProfileVersion[] @relation("VoiceProfileVersionEmbeddingExtractorModel")
+  voicePreviewsAsTts         VoicePreview[]           @relation("VoicePreviewTtsModel")
+  audioScriptsAsDirector     AudioScript[]            @relation("AudioScriptDirectorModel")
+  audioScriptChunksAsDirector AudioScriptChunk[]      @relation("AudioScriptChunkDirectorModel")
+  ttsJobsAsTts               TtsJob[]                 @relation("TtsJobTtsModel")
+  audioChunksAsDirector      AudioChunk[]             @relation("AudioChunkDirectorModel")
+  audioChunksAsTts           AudioChunk[]             @relation("AudioChunkTtsModel")
+  audioChunksAsAsr           AudioChunk[]             @relation("AudioChunkAsrModel")
+  chapterAudiosAsAudioTool   ChapterAudio[]           @relation("ChapterAudioAudioToolModel")
+  audiobooksAsAudioTool      Audiobook[]              @relation("AudiobookAudioToolModel")
+  audiobookRenditionsAsAudioTool AudiobookRendition[] @relation("AudiobookRenditionAudioToolModel")
+
+  @@unique([modelRegistryId, version, paramsFingerprint])
+  @@map("model_version")
+}
+
+// =============================================================================
+// §15 — JOBS AND ATTEMPTS
+// =============================================================================
+
+/// §15.1. The sole authority on job state; the queue is a cache of this table.
+model ProcessingJob {
+  id       String      @id @db.Uuid
+  tenantId String      @map("tenant_id") @db.Uuid
+  bookId   String?     @map("book_id") @db.Uuid
+  type     JobType
+  queue    JobQueue
+  priority JobPriority
+
+  relatedResourceType ResourceType @map("related_resource_type")
+  relatedResourceId   String       @map("related_resource_id") @db.Uuid
+  scope               Json?        @db.JsonB
+
+  parentJobId        String? @map("parent_job_id") @db.Uuid
+  childJobCount      Int     @default(0) @map("child_job_count")
+  childSucceededCount Int    @default(0) @map("child_succeeded_count")
+  childFailedCount   Int     @default(0) @map("child_failed_count")
+
+  status          JobStatus
+  statusChangedAt DateTime  @map("status_changed_at") @db.Timestamptz(6)
+  blockedReason   String?   @map("blocked_reason")
+
+  attemptCount  Int       @default(0) @map("attempt_count")
+  maxAttempts   Int       @map("max_attempts")
+  retryCount    Int       @default(0) @map("retry_count")
+  nextAttemptAt DateTime? @map("next_attempt_at") @db.Timestamptz(6)
+
+  progress       Float   @default(0) @db.Real
+  progressStage  String? @map("progress_stage")
+  completedUnits Int     @default(0) @map("completed_units")
+  totalUnits     Int?    @map("total_units")
+
+  leaseWorkerId   String?   @map("lease_worker_id") @db.Uuid
+  leaseExpiresAt  DateTime? @map("lease_expires_at") @db.Timestamptz(6)
+  leaseFence      BigInt    @default(0) @map("lease_fence")
+
+  idempotencyKey         String  @map("idempotency_key")
+  idempotencyFingerprint String  @map("idempotency_fingerprint") @db.Char(64)
+  forced                 Boolean @default(false)
+  forcedByUserId         String? @map("forced_by_user_id") @db.Uuid
+
+  errorCode      String?  @map("error_code")
+  errorClass     String?  @map("error_class")
+  errorMessage   String?  @map("error_message")
+  errorRetryable Boolean? @map("error_retryable")
+  errorTerminal  Boolean? @map("error_terminal")
+
+  resultResourceType ResourceType? @map("result_resource_type")
+  resultResourceId   String?       @map("result_resource_id") @db.Uuid
+  resultVersion      Int?          @map("result_version")
+
+  cancellationRequested         Boolean   @default(false) @map("cancellation_requested")
+  cancellationRequestedAt       DateTime? @map("cancellation_requested_at") @db.Timestamptz(6)
+  cancellationRequestedByUserId String?   @map("cancellation_requested_by_user_id") @db.Uuid
+  cancellationEffectiveAt       DateTime? @map("cancellation_effective_at") @db.Timestamptz(6)
+
+  correlationId   String  @map("correlation_id")
+  causationId     String? @map("causation_id")
+  traceparent     String?
+  createdByUserId String? @map("created_by_user_id") @db.Uuid
+
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  queuedAt    DateTime? @map("queued_at") @db.Timestamptz(6)
+  startedAt   DateTime? @map("started_at") @db.Timestamptz(6)
+  completedAt DateTime? @map("completed_at") @db.Timestamptz(6)
+  updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  heartbeatAt DateTime? @map("heartbeat_at") @db.Timestamptz(6)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  book   Book?  @relation(fields: [bookId], references: [id], onDelete: Restrict)
+
+  parentJob ProcessingJob?  @relation("ProcessingJobTree", fields: [parentJobId], references: [id], onDelete: Restrict)
+  childJobs ProcessingJob[] @relation("ProcessingJobTree")
+
+  createdByUser                 User? @relation("ProcessingJobCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  forcedByUser                  User? @relation("ProcessingJobForcedBy", fields: [forcedByUserId], references: [id], onDelete: Restrict)
+  cancellationRequestedByUser   User? @relation("ProcessingJobCancellationRequestedBy", fields: [cancellationRequestedByUserId], references: [id], onDelete: Restrict)
+
+  attempts             ProcessingAttempt[]
+  dependencies         JobDependency[]      @relation("JobDependencyJob")
+  dependents           JobDependency[]      @relation("JobDependencyDependsOn")
+  idempotencyKeys      IdempotencyKey[]
+  ttsJobs              TtsJob[]             @relation("TtsJobProcessingJob")
+  characterMerges      CharacterMerge[]     @relation("CharacterMergeJob")
+  storyBibleVersions   StoryBibleVersion[]  @relation("StoryBibleVersionJob")
+  voicePreviews        VoicePreview[]       @relation("VoicePreviewJob")
+  audioScripts         AudioScript[]        @relation("AudioScriptJob")
+  chapterAudios        ChapterAudio[]       @relation("ChapterAudioJob")
+  audiobooks           Audiobook[]          @relation("AudiobookJob")
+  audiobookRenditions  AudiobookRendition[] @relation("AudiobookRenditionJob")
+
+  @@index([bookId, createdAt(sort: Desc)])
+  @@index([tenantId, status, createdAt(sort: Desc)])
+  @@index([relatedResourceType, relatedResourceId])
+  @@map("processing_job")
+}
+
+/// §15.2. Immutable after the terminal write. No `updated_at` (§4).
+/// `worker_id` is deliberately NOT a foreign key: an attempt must outlive the
+/// worker registration (§15.2).
+model ProcessingAttempt {
+  id                 String        @id @db.Uuid
+  tenantId           String        @map("tenant_id") @db.Uuid
+  jobId              String        @map("job_id") @db.Uuid
+  bookId             String?       @map("book_id") @db.Uuid
+  attemptNumber      Int           @map("attempt_number")
+  status             AttemptStatus
+  workerId           String        @map("worker_id") @db.Uuid
+  workerHostRef      String?       @map("worker_host_ref")
+  leaseFence         BigInt        @map("lease_fence")
+  modelVersions      Json?         @map("model_versions") @db.JsonB
+  startedAt          DateTime      @map("started_at") @db.Timestamptz(6)
+  endedAt            DateTime?     @map("ended_at") @db.Timestamptz(6)
+  durationMs         Int?          @map("duration_ms")
+  errorCode          String?       @map("error_code")
+  errorClass         String?       @map("error_class")
+  errorMessage       String?       @map("error_message")
+  errorDetail        Json?         @map("error_detail") @db.JsonB
+  diagnosticStorageKey String?     @map("diagnostic_storage_key")
+  resourceUsage      Json?         @map("resource_usage") @db.JsonB
+  outputResourceType ResourceType? @map("output_resource_type")
+  outputResourceId   String?       @map("output_resource_id") @db.Uuid
+  createdAt          DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  tenant Tenant        @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  job    ProcessingJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  book   Book?         @relation(fields: [bookId], references: [id], onDelete: Restrict)
+
+  @@unique([jobId, attemptNumber])
+  @@index([jobId, startedAt])
+  @@index([workerId, startedAt(sort: Desc)])
+  @@map("processing_attempt")
+}
+
+/// §15.3 join table (D-18). The DAG edges behind `BLOCKED`.
+model JobDependency {
+  id              String         @id @db.Uuid
+  jobId           String         @map("job_id") @db.Uuid
+  dependsOnJobId  String?        @map("depends_on_job_id") @db.Uuid
+  kind            DependencyKind
+  gateKey         String?        @map("gate_key")
+  satisfiedAt     DateTime?      @map("satisfied_at") @db.Timestamptz(6)
+  createdAt       DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime       @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  job          ProcessingJob  @relation("JobDependencyJob", fields: [jobId], references: [id], onDelete: Cascade)
+  dependsOnJob ProcessingJob? @relation("JobDependencyDependsOn", fields: [dependsOnJobId], references: [id], onDelete: Cascade)
+
+  // The document specifies `UNIQUE (job_id, depends_on_job_id, gate_key) NULLS NOT DISTINCT`
+  // (PostgreSQL 15+). Prisma cannot emit NULLS NOT DISTINCT, so it lives in migration.sql.
+  @@map("job_dependency")
+}
+
+/// §15.4. The HTTP-layer idempotency registry, distinct from job identity (§21.2).
+model IdempotencyKey {
+  id                 String            @id @db.Uuid
+  tenantId           String            @map("tenant_id") @db.Uuid
+  principalId        String            @map("principal_id") @db.Uuid
+  method             String
+  pathTemplate       String            @map("path_template")
+  key                String
+  requestBodyHash    String            @map("request_body_hash") @db.Char(64)
+  status             IdempotencyStatus
+  responseStatusCode Int?              @map("response_status_code")
+  responseBody       Json?             @map("response_body") @db.JsonB
+  responseLocation   String?           @map("response_location")
+  jobId              String?           @map("job_id") @db.Uuid
+  createdAt          DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+  completedAt        DateTime?         @map("completed_at") @db.Timestamptz(6)
+  expiresAt          DateTime          @map("expires_at") @db.Timestamptz(6)
+  updatedAt          DateTime          @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  tenant Tenant         @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  job    ProcessingJob? @relation(fields: [jobId], references: [id], onDelete: SetNull)
+
+  @@unique([tenantId, principalId, method, pathTemplate, key])
+  @@index([expiresAt])
+  @@index([jobId])
+  @@map("idempotency_key")
+}
+
+/// §15.5. Not tenant-scoped — workers are cross-tenant by necessity. Never
+/// exposed publicly. `created_at` is added per the §4 universal timestamp rule.
+model Worker {
+  id                    String       @id @db.Uuid
+  kind                  WorkerKind
+  queues                JobQueue[]
+  capabilities          Json         @db.JsonB
+  loadedModelVersionIds String[]     @map("loaded_model_version_ids") @db.Uuid
+  status                WorkerStatus
+  quarantineReason      String?      @map("quarantine_reason")
+  quarantinedAt         DateTime?    @map("quarantined_at") @db.Timestamptz(6)
+  lastHeartbeatAt       DateTime?    @map("last_heartbeat_at") @db.Timestamptz(6)
+  serviceVersion        String       @map("service_version")
+  firstSeenAt           DateTime     @map("first_seen_at") @db.Timestamptz(6)
+  createdAt             DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt             DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@index([status, lastHeartbeatAt])
+  @@map("worker")
+}
+
+// =============================================================================
+// §17 — AUDIT LOG
+// =============================================================================
+
+/// §17.1. Append-only; no application role holds UPDATE or DELETE (§37.3).
+/// PARTITIONED BY RANGE (occurred_at) — Prisma has no partition support, so the
+/// partitioning (and the PK widening it forces) is applied in migration.sql.
+/// `resource_id` deliberately carries NO foreign key: the log is polymorphic and
+/// must survive the purge of its target.
+model AuditLog {
+  id            String       @id @db.Uuid
+  seq           BigInt       @default(autoincrement())
+  occurredAt    DateTime     @map("occurred_at") @db.Timestamptz(6)
+  tenantId      String?      @map("tenant_id") @db.Uuid
+  actorKind     ActorKind    @map("actor_kind")
+  actorUserId   String?      @map("actor_user_id") @db.Uuid
+  actorService  String?      @map("actor_service")
+  action        AuditAction
+  resourceType  ResourceType @map("resource_type")
+  resourceId    String?      @map("resource_id") @db.Uuid
+  bookId        String?      @map("book_id") @db.Uuid
+  requestId     String?      @map("request_id")
+  traceId       String?      @map("trace_id")
+  correlationId String?      @map("correlation_id")
+  outcome       AuditOutcome
+  metadata      Json?        @db.JsonB
+  createdAt     DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  tenant    Tenant? @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  actorUser User?   @relation("AuditLogActor", fields: [actorUserId], references: [id], onDelete: Restrict)
+
+  @@index([tenantId, occurredAt(sort: Desc)])
+  @@index([resourceType, resourceId, occurredAt(sort: Desc)])
+  @@index([actorUserId, occurredAt(sort: Desc)])
+  @@map("audit_log")
+}
+
+// =============================================================================
+// §15.6 / §15.7 — OUTBOX AND INBOX (closes E-19 / OQ-EV-1)
+// =============================================================================
+
+/// §15.6. The write side of the Outbox pattern: a domain state change and the
+/// intent to publish it are written in the same transaction. The document's
+/// column list ends at `created_at`; no `updated_at` is specified.
+model OutboxMessage {
+  id              String       @id @db.Uuid
+  eventId         String       @unique @map("event_id") @db.Uuid
+  eventType       String       @map("event_type")
+  schemaVersion   String       @map("schema_version")
+  occurredAt      DateTime     @map("occurred_at") @db.Timestamptz(6)
+  tenantId        String       @map("tenant_id") @db.Uuid
+  bookId          String?      @map("book_id") @db.Uuid
+  jobId           String?      @map("job_id") @db.Uuid
+  correlationId   String       @map("correlation_id")
+  causationId     String       @map("causation_id")
+  traceparent     String?
+  producer        String
+  producerVersion String       @map("producer_version")
+  payload         Json         @db.JsonB
+  aggregateType   String       @map("aggregate_type")
+  aggregateId     String       @map("aggregate_id") @db.Uuid
+  status          OutboxStatus @default(PENDING)
+  publishedAt     DateTime?    @map("published_at") @db.Timestamptz(6)
+  publishAttempts Int          @default(0) @map("publish_attempts")
+  lastError       String?      @map("last_error")
+  createdAt       DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  book   Book?  @relation(fields: [bookId], references: [id], onDelete: Restrict)
+
+  @@index([aggregateType, aggregateId, createdAt])
+  @@map("outbox_message")
+}
+
+/// §15.7. The read side: "have I already processed this fact?" under
+/// at-least-once delivery. A primary-key violation means "already processed" and
+/// is success, not an error.
+model EventInbox {
+  consumerName String       @map("consumer_name")
+  eventId      String       @map("event_id") @db.Uuid
+  processedAt  DateTime     @map("processed_at") @db.Timestamptz(6)
+  outcome      InboxOutcome
+  createdAt    DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@id([consumerName, eventId])
+  @@index([processedAt])
+  @@map("event_inbox")
+}

@@ -1,0 +1,4 @@
+# docs/architecture/ is the authoritative, frozen architecture contract —
+# never auto-formatted, never touched by tooling. Everything else is fair game.
+docs/architecture/
+pnpm-lock.yaml

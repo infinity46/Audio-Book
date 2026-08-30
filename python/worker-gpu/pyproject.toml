@@ -1,0 +1,25 @@
+[project]
+name = "worker-gpu"
+version = "0.1.0"
+description = "TTS worker. Consumes the `gpu` queue. GPU-isolated. Phase 1 scaffolding."
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "workers-common",
+    "uvicorn[standard]>=0.32",
+]
+# NOTE: no torch, no CUDA bindings, no TTS engine. Phase 1 loads no model. Those
+# dependencies arrive with the real provider, and they are what will force this service
+# onto a CUDA base image (see Dockerfile).
+
+[project.scripts]
+worker-gpu = "worker_gpu.main:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/worker_gpu"]
+
+[tool.uv.sources]
+workers-common = { workspace = true }

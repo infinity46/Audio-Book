@@ -1,0 +1,102 @@
+# uv workspace root for the AI Audiobook Generator Python services.
+#
+# This is a *virtual* workspace root: it intentionally has no [project] table, so
+# nothing is built or published from here. It exists to give the three members a
+# single resolved lockfile (python/uv.lock) while keeping each member an
+# independently deployable unit with its own pyproject.toml and its own container.
+#
+#   workers-common  library, never deployed on its own
+#   worker-ai       Director/LLM worker            (queue: `ai`)
+#   worker-gpu      TTS worker, GPU-isolated       (queue: `gpu`)
+#
+# worker-gpu is ALWAYS its own deployment unit. It is never co-located in a
+# process or container with worker-ai or with the Node services.
+
+[tool.uv.workspace]
+members = ["workers-common", "worker-ai", "worker-gpu"]
+
+[tool.uv.sources]
+workers-common = { workspace = true }
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.8",
+    "mypy>=1.13",
+    "httpx2>=0.29",          # required by starlette's TestClient (it deprecated httpx)
+    "boto3-stubs[s3]>=1.35", # types for the storage wrapper
+]
+
+# --------------------------------------------------------------------------- #
+# Lint
+# --------------------------------------------------------------------------- #
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = [
+    "workers-common/src",
+    "worker-ai/src",
+    "worker-gpu/src",
+]
+
+[tool.ruff.lint]
+select = [
+    "E", "W",    # pycodestyle
+    "F",         # pyflakes
+    "I",         # isort
+    "N",         # pep8-naming
+    "UP",        # pyupgrade
+    "B",         # flake8-bugbear
+    "A",         # flake8-builtins
+    "C4",        # comprehensions
+    "DTZ",       # flake8-datetimez -- naive datetimes are a real bug class here
+    "T20",       # flake8-print -- structured logging only, never print()
+    "SIM",       # flake8-simplify
+    "PTH",       # pathlib
+    "RUF",
+    "ASYNC",     # flake8-async
+    "S",         # bandit
+    "BLE",       # blind except -- each one must be justified with a noqa reason
+]
+ignore = [
+    "S101",      # assert is fine in tests
+]
+
+[tool.ruff.lint.per-file-ignores]
+"*/tests/*" = ["S105", "S106"]  # hardcoded fake secrets in fixtures
+
+[tool.ruff.lint.isort]
+known-first-party = ["workers_common", "worker_ai", "worker_gpu"]
+
+# --------------------------------------------------------------------------- #
+# Types
+# --------------------------------------------------------------------------- #
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unreachable = true
+warn_no_return = true
+disallow_any_generics = true
+no_implicit_reexport = true
+show_error_codes = true
+mypy_path = [
+    "workers-common/src",
+    "worker-ai/src",
+    "worker-gpu/src",
+]
+explicit_package_bases = true
+
+# The bullmq Python client ships no py.typed marker.
+[[tool.mypy.overrides]]
+module = ["bullmq.*"]
+ignore_missing_imports = true
+
+# --------------------------------------------------------------------------- #
+# Tests
+# --------------------------------------------------------------------------- #
+[tool.pytest.ini_options]
+testpaths = ["workers-common/tests"]
+asyncio_mode = "auto"
+addopts = "-q --strict-markers --strict-config"
+filterwarnings = ["error"]

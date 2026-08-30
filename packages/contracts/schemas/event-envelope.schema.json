@@ -1,0 +1,111 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://audio-book.local/contracts/event-envelope.v1.json",
+  "title": "EventEnvelope",
+  "description": "Fact envelope per docs/architecture/event-contracts.md §7. event_id is stable across redeliveries (identity of the fact, not the delivery) — the key asymmetry vs the command envelope's message_id.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "event_id",
+    "event_type",
+    "schema_version",
+    "occurred_at",
+    "correlation_id",
+    "causation_id",
+    "tenant_id",
+    "producer",
+    "producer_version",
+    "payload"
+  ],
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Identity of the fact. Stable across redeliveries — a producer that regenerates this for a retry is a defect."
+    },
+    "event_type": {
+      "type": "string",
+      "enum": [
+        "book.uploaded",
+        "book.parse_started",
+        "book.parsed",
+        "book.parse_failed",
+        "book.structure_ready",
+        "book.analysis_completed",
+        "character.discovered",
+        "character.merged",
+        "character.confirmed",
+        "voice.version_created",
+        "voice.preview_requested",
+        "voice.preview_ready",
+        "voice.approved",
+        "voice.locked",
+        "director.started",
+        "director.chunk_completed",
+        "director.completed",
+        "director.failed",
+        "tts.started",
+        "tts.chunk_completed",
+        "tts.chunk_failed",
+        "tts.completed",
+        "audio.validated",
+        "audio.validation_failed",
+        "chapter.assembly_started",
+        "chapter.completed",
+        "audiobook.assembly_started",
+        "audiobook.completed",
+        "audiobook.failed",
+        "job.created",
+        "job.started",
+        "job.progress",
+        "job.retrying",
+        "job.failed",
+        "job.cancelled",
+        "job.dead_lettered"
+      ],
+      "description": "One of the 36 names fixed by event-contracts.md §12 — no others exist. Adding one is an architecture change (context.md amendment), not an application change."
+    },
+    "schema_version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+$",
+      "description": "MAJOR.MINOR of this event_type's payload schema, independent of API version and IR version."
+    },
+    "occurred_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "The producing transaction's commit time, not publish time."
+    },
+    "correlation_id": { "type": "string", "format": "uuid" },
+    "causation_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "message_id of the command that produced this fact, or event_id of a triggering event."
+    },
+    "tenant_id": { "type": "string", "format": "uuid" },
+    "book_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Absent only for tenant-scoped events."
+    },
+    "book_version_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Present on every event about book content."
+    },
+    "job_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Absent for facts produced synchronously (e.g. voice.approved)."
+    },
+    "producer": { "type": "string", "minLength": 1 },
+    "producer_version": { "type": "string", "minLength": 1 },
+    "traceparent": {
+      "type": "string",
+      "description": "W3C trace-context string. SHOULD be present, not required."
+    },
+    "payload": {
+      "type": "object",
+      "description": "Type-specific. Identifiers and small facts only — never bulk content."
+    }
+  }
+}

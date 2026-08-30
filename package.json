@@ -1,0 +1,50 @@
+{
+  "name": "audio-book",
+  "private": true,
+  "version": "0.0.0",
+  "description": "AI Audiobook Generator — monorepo root",
+  "engines": {
+    "node": ">=20.0.0",
+    "pnpm": ">=9.0.0"
+  },
+  "packageManager": "pnpm@9.12.0",
+  "scripts": {
+    "build": "pnpm -r --filter=./apps/* --filter=./packages/* run build",
+    "lint": "eslint .",
+    "format": "prettier --write \"**/*.{ts,tsx,js,json,md}\" --ignore-path .gitignore --ignore-path .prettierignore",
+    "format:check": "prettier --check \"**/*.{ts,tsx,js,json,md}\" --ignore-path .gitignore --ignore-path .prettierignore",
+    "typecheck": "pnpm -r --filter=./apps/* --filter=./packages/* run typecheck",
+    "test": "pnpm -r --filter=./apps/* --filter=./packages/* run test",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "test:contract": "vitest run --config vitest.contract.config.ts --passWithNoTests",
+    "prisma:generate": "prisma generate --schema prisma/schema.prisma",
+    "prisma:migrate:deploy": "prisma migrate deploy --schema prisma/schema.prisma",
+    "prisma:migrate:dev": "prisma migrate dev --schema prisma/schema.prisma",
+    "contracts:generate": "pnpm --filter @audio-book/contracts run generate",
+    "schema:drift-check": "tsx infra/scripts/schema-drift-check.ts",
+    "db:seed": "tsx infra/scripts/seed.ts"
+  },
+  "devDependencies": {
+    "@audio-book/config": "workspace:*",
+    "@audio-book/contracts": "workspace:*",
+    "@audio-book/database": "workspace:*",
+    "@audio-book/errors": "workspace:*",
+    "@audio-book/events": "workspace:*",
+    "@audio-book/logging": "workspace:*",
+    "@audio-book/observability": "workspace:*",
+    "@audio-book/queue": "workspace:*",
+    "@audio-book/storage": "workspace:*",
+    "@audio-book/worker-cpu": "workspace:*",
+    "@eslint/js": "^9.17.0",
+    "@prisma/client": "^5.22.0",
+    "@types/node": "^22.10.2",
+    "eslint": "^9.17.0",
+    "ioredis": "^5.4.2",
+    "prettier": "^3.4.2",
+    "prisma": "^5.22.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "typescript-eslint": "^8.18.1",
+    "vitest": "^2.1.8"
+  }
+}

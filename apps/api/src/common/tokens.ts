@@ -1,0 +1,8 @@
+export const API_CONFIG = Symbol('API_CONFIG');
+export const LOGGER = Symbol('LOGGER');
+export const METRICS = Symbol('METRICS');
+export const PRISMA = Symbol('PRISMA');
+export const REDIS = Symbol('REDIS');
+export const QUEUE_MANAGER = Symbol('QUEUE_MANAGER');
+export const OUTBOX_PUBLISHER = Symbol('OUTBOX_PUBLISHER');
+export const STORAGE_PROVIDER = Symbol('STORAGE_PROVIDER');
