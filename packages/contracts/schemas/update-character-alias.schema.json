@@ -1,0 +1,24 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": false,
+  "minProperties": 1,
+  "properties": {
+    "surface_form": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "alias_type": {
+      "type": "string",
+      "enum": [
+        "GIVEN_NAME",
+        "FULL_NAME",
+        "SURNAME",
+        "NICKNAME",
+        "TITLE",
+        "EPITHET",
+        "DESCRIPTOR",
+        "RELATIONAL"
+      ]
+    },
+    "valid_from_spine": { "type": ["integer", "null"], "minimum": 0 },
+    "valid_to_spine": { "type": ["integer", "null"], "minimum": 0 }
+  }
+}

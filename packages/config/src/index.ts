@@ -4,7 +4,9 @@ import {
   authEnvSchema,
   databaseEnvSchema,
   httpEnvSchema,
+  ingestionEnvSchema,
   metricsEnvSchema,
+  ocrEnvSchema,
   outboxPublisherEnvSchema,
   redisEnvSchema,
   storageEnvSchema,
@@ -97,6 +99,31 @@ export interface OutboxPublisherSection {
   batchSize: number;
 }
 
+export interface IngestionSection {
+  maxFileSizeBytes: number;
+  maxPages: number;
+  maxEpubEntryCount: number;
+  maxEpubUncompressedBytes: number;
+  maxEpubEntryUncompressedBytes: number;
+  parserTimeoutMs: number;
+  normalizationTimeoutMs: number;
+  dehyphenate: boolean;
+  headerFooterConfidenceThreshold: number;
+  maxImageDimensionPx: number;
+  maxImagePixels: number;
+  maxImagePages: number;
+  ocrLowConfidenceThreshold: number;
+}
+
+/** OCR engine selection/tuning — see schemas.ts ocrEnvSchema for the "why" on OCR_LANG_PATH. */
+export interface OcrSection {
+  enabled: boolean;
+  language: string;
+  langPath?: string;
+  timeoutMs: number;
+  rasterScale: number;
+}
+
 export interface ApiConfig {
   app: AppSection;
   http: HttpSection;
@@ -112,6 +139,8 @@ export interface WorkerConfig {
   models: ModelsSection;
   databasePool: DatabasePoolSection;
   worker: { concurrency: number };
+  ingestion: IngestionSection;
+  ocr: OcrSection;
 }
 
 const apiEnvSchema = appEnvSchema
@@ -132,7 +161,9 @@ const workerEnvSchemaComposed = appEnvSchema
   .merge(redisEnvSchema)
   .merge(storageEnvSchema)
   .merge(metricsEnvSchema)
-  .merge(workerEnvSchema);
+  .merge(workerEnvSchema)
+  .merge(ingestionEnvSchema)
+  .merge(ocrEnvSchema);
 
 const MODELS_PLACEHOLDER: ModelsSection = { _phase1Placeholder: true };
 
@@ -203,5 +234,27 @@ export function buildWorkerConfig(env: NodeJS.ProcessEnv = process.env): WorkerC
     models: MODELS_PLACEHOLDER,
     databasePool: { min: parsed.DATABASE_POOL_MIN, max: parsed.DATABASE_POOL_MAX },
     worker: { concurrency: parsed.WORKER_CONCURRENCY },
+    ingestion: {
+      maxFileSizeBytes: parsed.INGESTION_MAX_FILE_SIZE_BYTES,
+      maxPages: parsed.INGESTION_MAX_PAGES,
+      maxEpubEntryCount: parsed.INGESTION_MAX_EPUB_ENTRY_COUNT,
+      maxEpubUncompressedBytes: parsed.INGESTION_MAX_EPUB_UNCOMPRESSED_BYTES,
+      maxEpubEntryUncompressedBytes: parsed.INGESTION_MAX_EPUB_ENTRY_UNCOMPRESSED_BYTES,
+      parserTimeoutMs: parsed.INGESTION_PARSER_TIMEOUT_MS,
+      normalizationTimeoutMs: parsed.INGESTION_NORMALIZATION_TIMEOUT_MS,
+      dehyphenate: parsed.INGESTION_DEHYPHENATE,
+      headerFooterConfidenceThreshold: parsed.INGESTION_HEADER_FOOTER_CONFIDENCE_THRESHOLD,
+      maxImageDimensionPx: parsed.INGESTION_MAX_IMAGE_DIMENSION_PX,
+      maxImagePixels: parsed.INGESTION_MAX_IMAGE_PIXELS,
+      maxImagePages: parsed.INGESTION_MAX_IMAGE_PAGES,
+      ocrLowConfidenceThreshold: parsed.INGESTION_OCR_LOW_CONFIDENCE_THRESHOLD,
+    },
+    ocr: {
+      enabled: parsed.OCR_ENABLED,
+      language: parsed.OCR_LANGUAGE,
+      langPath: parsed.OCR_LANG_PATH,
+      timeoutMs: parsed.OCR_TIMEOUT_MS,
+      rasterScale: parsed.OCR_RASTER_SCALE,
+    },
   };
 }

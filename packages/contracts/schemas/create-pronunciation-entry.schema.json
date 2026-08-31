@@ -1,0 +1,15 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["surface_form", "applies_to"],
+  "properties": {
+    "surface_form": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "ipa": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "lexicon_key": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "applies_to": { "type": "string", "enum": ["GLOBAL", "CHARACTER", "CHAPTER"] },
+    "applies_to_character_id": { "type": ["string", "null"], "format": "uuid" },
+    "applies_to_chapter_id": { "type": ["string", "null"], "format": "uuid" },
+    "notes": { "type": ["string", "null"], "maxLength": 1024 }
+  }
+}

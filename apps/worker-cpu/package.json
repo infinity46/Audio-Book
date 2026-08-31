@@ -18,10 +18,12 @@
     "@audio-book/database": "workspace:*",
     "@audio-book/errors": "workspace:*",
     "@audio-book/events": "workspace:*",
+    "@audio-book/ingestion": "workspace:*",
     "@audio-book/logging": "workspace:*",
     "@audio-book/observability": "workspace:*",
     "@audio-book/queue": "workspace:*",
     "@audio-book/storage": "workspace:*",
+    "@prisma/client": "^5.22.0",
     "ioredis": "^5.4.2"
   },
   "devDependencies": {

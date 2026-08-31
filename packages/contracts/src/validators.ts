@@ -26,6 +26,17 @@ addFormats(ajv);
 
 export const commandEnvelopeSchema = loadSchema('command-envelope.schema.json');
 export const eventEnvelopeSchema = loadSchema('event-envelope.schema.json');
+export const createBookSchema = loadSchema('create-book.schema.json');
+export const createUploadSessionSchema = loadSchema('create-upload-session.schema.json');
+export const completeUploadSessionSchema = loadSchema('complete-upload-session.schema.json');
+export const requestIngestionSchema = loadSchema('request-ingestion.schema.json');
+export const startAnalysisSchema = loadSchema('start-analysis.schema.json');
+export const updateCharacterSchema = loadSchema('update-character.schema.json');
+export const createCharacterAliasSchema = loadSchema('create-character-alias.schema.json');
+export const updateCharacterAliasSchema = loadSchema('update-character-alias.schema.json');
+export const createCharacterMergeSchema = loadSchema('create-character-merge.schema.json');
+export const createPronunciationEntrySchema = loadSchema('create-pronunciation-entry.schema.json');
+export const updatePronunciationEntrySchema = loadSchema('update-pronunciation-entry.schema.json');
 
 export const validateCommandEnvelope: ValidateFunction = ajv.compile(commandEnvelopeSchema);
 export const validateEventEnvelope: ValidateFunction = ajv.compile(eventEnvelopeSchema);

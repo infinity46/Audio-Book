@@ -74,3 +74,47 @@ export const outboxPublisherEnvSchema = z.object({
   OUTBOX_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(500),
   OUTBOX_BATCH_SIZE: z.coerce.number().int().positive().default(50),
 });
+
+/** Tunable resource limits/behavior for the ingestion pipeline (task §63/§75/§118). Defaults match @audio-book/ingestion's own DEFAULT_INGESTION_CONFIG. */
+export const ingestionEnvSchema = z.object({
+  INGESTION_MAX_FILE_SIZE_BYTES: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(200 * 1024 * 1024),
+  INGESTION_MAX_PAGES: z.coerce.number().int().positive().default(3000),
+  INGESTION_MAX_EPUB_ENTRY_COUNT: z.coerce.number().int().positive().default(10_000),
+  INGESTION_MAX_EPUB_UNCOMPRESSED_BYTES: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(500 * 1024 * 1024),
+  INGESTION_MAX_EPUB_ENTRY_UNCOMPRESSED_BYTES: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(100 * 1024 * 1024),
+  INGESTION_PARSER_TIMEOUT_MS: z.coerce.number().int().positive().default(120_000),
+  INGESTION_NORMALIZATION_TIMEOUT_MS: z.coerce.number().int().positive().default(60_000),
+  INGESTION_DEHYPHENATE: z.coerce.boolean().default(true),
+  INGESTION_HEADER_FOOTER_CONFIDENCE_THRESHOLD: z.coerce.number().min(0).max(1).default(0.6),
+  INGESTION_MAX_IMAGE_DIMENSION_PX: z.coerce.number().int().positive().default(10_000),
+  INGESTION_MAX_IMAGE_PIXELS: z.coerce.number().int().positive().default(100_000_000),
+  INGESTION_MAX_IMAGE_PAGES: z.coerce.number().int().positive().default(3000),
+  INGESTION_OCR_LOW_CONFIDENCE_THRESHOLD: z.coerce.number().min(0).max(1).default(0.6),
+});
+
+/**
+ * OCR engine selection/tuning (task §25/§29/§119 follow-up: TesseractOcrProvider).
+ * `OCR_LANG_PATH` left unset means tesseract.js's default network fetch of
+ * trained-data files is allowed; infra/docker/worker-cpu.Dockerfile sets it
+ * to a build-time-baked local directory by default so the shipped image
+ * makes no such runtime call unless explicitly reconfigured otherwise.
+ */
+export const ocrEnvSchema = z.object({
+  OCR_ENABLED: z.coerce.boolean().default(true),
+  OCR_LANGUAGE: z.string().min(1).default('eng'),
+  OCR_LANG_PATH: z.string().optional(),
+  OCR_TIMEOUT_MS: z.coerce.number().int().positive().default(60_000),
+  OCR_RASTER_SCALE: z.coerce.number().positive().default(2.0),
+});

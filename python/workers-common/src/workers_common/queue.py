@@ -42,24 +42,57 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
-from typing import Any
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any
 
 from bullmq import Job, UnrecoverableError, Worker
 from pydantic import ValidationError
 
 from workers_common.config import WorkerSettings
 from workers_common.correlation import bind_job_context
-from workers_common.events import CommandEnvelope
+from workers_common.events import SimpleJobEnvelope
 from workers_common.health import WorkerHealth
 from workers_common.logging import get_logger
 
+if TYPE_CHECKING:  # pragma: no cover - import cycle guard, typing only
+    from workers_common.db import Database
+    from workers_common.storage import ObjectStorage
+
 log = get_logger(__name__)
 
-JobHandler = Callable[[CommandEnvelope], Awaitable[None]]
 
-# The envelope major version this build understands. A message with a different MAJOR is
-# terminal, not retryable -- redelivering it will not make this build understand it (§14).
-SUPPORTED_SCHEMA_MAJOR = 1
+@dataclass(frozen=True, slots=True)
+class JobContext:
+    """Everything a real handler needs, bundled into the single argument it receives.
+
+    Phase 1's `JobHandler` took only the envelope -- there was no real work to do, so
+    nothing needed the database or object storage. Phase 3 is the first handler that
+    actually persists anything, so this widens the seam: `db`/`storage`/`settings` are
+    the same long-lived, per-process instances `WorkerRuntime` already owns (see
+    `runtime.py`), handed to every job rather than each handler reaching into globals.
+    `message_type` is BullMQ's own `job.name` (the `jobName` the TypeScript producer set
+    at enqueue time) -- see `SimpleJobEnvelope`'s docstring for why the job's type is not
+    an envelope field in the real producer contract. `attempt`/`max_attempts` come from
+    BullMQ's own `job.attemptsMade`/`job.opts['attempts']` -- a handler that marks its
+    `processing_job` row terminally FAILED needs to know whether THIS is the last
+    attempt, or whether BullMQ is about to retry (mirrors
+    `apps/worker-cpu/src/processors/ingestion.ts`'s `attemptsMade`/`maxAttempts` deps).
+    """
+
+    envelope: SimpleJobEnvelope
+    message_type: str
+    db: Database
+    storage: ObjectStorage
+    settings: WorkerSettings
+    attempt: int
+    max_attempts: int
+
+    @property
+    def is_final_attempt(self) -> bool:
+        return self.attempt >= self.max_attempts
+
+
+JobHandler = Callable[[JobContext], Awaitable[None]]
 
 
 class TransientJobError(RuntimeError):
@@ -90,10 +123,14 @@ class QueueConsumer:
         settings: WorkerSettings,
         health: WorkerHealth,
         handler: JobHandler,
+        db: Database,
+        storage: ObjectStorage,
     ) -> None:
         self._settings = settings
         self._health = health
         self._handler = handler
+        self._db = db
+        self._storage = storage
         self._worker: Worker | None = None
 
     async def start(self) -> None:
@@ -139,7 +176,7 @@ class QueueConsumer:
             )
 
         try:
-            envelope = CommandEnvelope.model_validate(job.data)
+            envelope = SimpleJobEnvelope.model_validate(job.data)
         except ValidationError as exc:
             # No correlation context available -- the envelope is what carries it.
             log.error(
@@ -149,39 +186,31 @@ class QueueConsumer:
                 bullmq_job_name=job.name,
                 error=str(exc),
             )
-            raise UnrecoverableError(f"Malformed command envelope: {exc}") from exc
+            raise UnrecoverableError(f"Malformed job envelope: {exc}") from exc
 
-        if not envelope.is_compatible_with(SUPPORTED_SCHEMA_MAJOR):
-            log.error(
-                "queue.schema_incompatible",
-                error_code="SCHEMA_VERSION_UNSUPPORTED",
-                message_type=envelope.message_type.value,
-                schema_version=envelope.schema_version,
-                supported_major=SUPPORTED_SCHEMA_MAJOR,
-            )
-            raise UnrecoverableError(
-                f"Envelope schema_version {envelope.schema_version} is not compatible with "
-                f"supported major {SUPPORTED_SCHEMA_MAJOR}."
-            )
+        message_type = job.name
+        max_attempts = job.opts.get("attempts", 1) if job.opts else 1
+        context = JobContext(
+            envelope=envelope,
+            message_type=message_type,
+            db=self._db,
+            storage=self._storage,
+            settings=self._settings,
+            attempt=job.attemptsMade + 1,
+            max_attempts=max_attempts,
+        )
 
         with bind_job_context(envelope, worker_id=self._settings.app.worker_id):
             self._health.job_started()
             try:
-                log.info(
-                    "job.started",
-                    message_type=envelope.message_type.value,
-                    priority=envelope.priority.value,
-                    # BullMQ's own job name is logged for operator cross-reference only.
-                    # The envelope's message_type is authoritative (§4.3 rule 2).
-                    bullmq_job_name=job.name,
-                )
-                await self._handler(envelope)
-                log.info("job.completed", message_type=envelope.message_type.value)
+                log.info("job.started", message_type=message_type, bullmq_job_id=job.id)
+                await self._handler(context)
+                log.info("job.completed", message_type=message_type)
             except TerminalJobError as exc:
                 log.error(
                     "job.failed_terminal",
                     error_code=exc.error_code,
-                    message_type=envelope.message_type.value,
+                    message_type=message_type,
                     error=str(exc),
                 )
                 raise UnrecoverableError(str(exc)) from exc
@@ -189,7 +218,7 @@ class QueueConsumer:
                 log.warning(
                     "job.failed_transient",
                     error_code=exc.error_code,
-                    message_type=envelope.message_type.value,
+                    message_type=message_type,
                     error=str(exc),
                 )
                 raise
@@ -201,7 +230,7 @@ class QueueConsumer:
                 log.exception(
                     "job.failed_unexpected",
                     error_code="JOB_UNEXPECTED_ERROR",
-                    message_type=envelope.message_type.value,
+                    message_type=message_type,
                     error=str(exc),
                 )
                 raise

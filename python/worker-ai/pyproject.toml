@@ -1,11 +1,13 @@
 [project]
 name = "worker-ai"
 version = "0.1.0"
-description = "Director / LLM worker. Consumes the `ai` queue. Phase 1 scaffolding."
+description = "Director / LLM worker. Consumes the `ai` queue. Phase 3: narrative understanding (analyze_scene, build_story_bible_delta). Director generation itself is still Phase 4 scaffolding."
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "workers-common",
     "uvicorn[standard]>=0.32",
+    "pydantic-settings>=2.6",
+    "httpx>=0.27",
 ]
 
 [project.scripts]

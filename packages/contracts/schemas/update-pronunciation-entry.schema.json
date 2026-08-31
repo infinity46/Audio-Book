@@ -1,0 +1,11 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": false,
+  "minProperties": 1,
+  "properties": {
+    "ipa": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "lexicon_key": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "notes": { "type": ["string", "null"], "maxLength": 1024 }
+  }
+}

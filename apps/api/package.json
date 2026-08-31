@@ -3,6 +3,9 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "exports": {
+    "./analysis/analysis.service": "./dist/analysis/analysis.service.js"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
@@ -16,6 +19,7 @@
     "@audio-book/database": "workspace:*",
     "@audio-book/errors": "workspace:*",
     "@audio-book/events": "workspace:*",
+    "@audio-book/ingestion": "workspace:*",
     "@audio-book/logging": "workspace:*",
     "@audio-book/observability": "workspace:*",
     "@audio-book/queue": "workspace:*",

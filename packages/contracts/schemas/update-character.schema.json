@@ -1,0 +1,35 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": false,
+  "minProperties": 1,
+  "properties": {
+    "display_name": { "type": "string", "minLength": 1, "maxLength": 512 },
+    "status": { "type": "string", "enum": ["CONFIRMED", "RETIRED"] },
+    "importance_rank": { "type": "integer", "minimum": 0 },
+    "speaking": { "type": "boolean" },
+    "pronoun_sets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["pronouns"],
+        "properties": {
+          "pronouns": { "type": "string", "minLength": 1, "maxLength": 64 },
+          "valid_from_spine": { "type": "integer", "minimum": 0 },
+          "valid_to_spine": { "type": ["integer", "null"], "minimum": 0 }
+        }
+      }
+    },
+    "speech_traits": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "register": { "type": "string", "maxLength": 128 },
+        "verbosity": { "type": "string", "maxLength": 128 },
+        "dialect_notes": { "type": "string", "maxLength": 1024 },
+        "baseline_emotion": { "type": "string", "maxLength": 64 }
+      }
+    }
+  }
+}

@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:  # pragma: no cover - import cycle guard, typing only
-    from workers_common.events import CommandEnvelope
+    from workers_common.events import CommandEnvelope, SimpleJobEnvelope
 
 # Each id is its own ContextVar so that a partial bind (e.g. a correlation id known at
 # startup, before any job exists) does not have to invent placeholder values for the rest.
@@ -129,37 +129,49 @@ def bind_context(**fields: Any) -> Iterator[None]:
 
 @contextmanager
 def bind_job_context(
-    envelope: CommandEnvelope,
+    envelope: SimpleJobEnvelope | CommandEnvelope,
     *,
     worker_id: str | None = None,
 ) -> Iterator[None]:
-    """Bind every identifier carried by an incoming command envelope.
+    """Bind every identifier carried by an incoming job envelope.
 
     This is the propagation boundary: ids arrive over the wire in the envelope and become
     ambient log context for everything the handler does.
 
-    Note `causation_id`: for work *this* job goes on to produce, the correct parent pointer
-    is this message's own `message_id`, not the `causation_id` it arrived with
-    (`event-contracts.md` §9). Use `causation_id_for_downstream()` when building outbound
-    messages rather than re-reading `causation_id` from the context.
+    Accepts either envelope shape. `SimpleJobEnvelope` -- the envelope the real TypeScript
+    `QueueManager` actually produces today (see `events.py`'s docstring on it) -- carries no
+    `message_id`/`attempt`/`lease_fence`; those are read via `getattr(..., None)` so they
+    stay unset rather than erroring, and a future producer emitting the fuller
+    `CommandEnvelope` populates them for real. `causation_id_for_downstream()` prefers a
+    bound `message_id` and falls back to `job_id`, matching the TypeScript ingestion
+    worker's own convention of reusing `job.correlationId` as `causationId` when no
+    finer-grained per-attempt identity exists (`apps/worker-cpu/src/processors/ingestion.ts`).
     """
+    causation = getattr(envelope, "causation_id", None)
     with bind_context(
         correlation_id=str(envelope.correlation_id),
-        causation_id=str(envelope.causation_id),
-        message_id=str(envelope.message_id),
+        causation_id=str(causation) if causation else None,
+        message_id=_str_or_none(getattr(envelope, "message_id", None)),
         job_id=str(envelope.job_id),
         tenant_id=str(envelope.tenant_id),
-        attempt=envelope.attempt,
-        lease_fence=envelope.lease_fence,
+        attempt=getattr(envelope, "attempt", None),
+        lease_fence=getattr(envelope, "lease_fence", None),
         worker_id=worker_id,
     ):
         yield
 
 
+def _str_or_none(value: Any) -> str | None:
+    return str(value) if value is not None else None
+
+
 def causation_id_for_downstream() -> str | None:
     """The `causation_id` any message produced from within this context must carry.
 
-    That is this message's `message_id` — the id of the thing that directly caused the new
-    message — and *not* the inbound `causation_id`, which points one hop further up.
+    Prefers this message's own `message_id` -- the id of the thing that directly caused
+    the new message (`event-contracts.md` §9) -- when one was bound. With no per-attempt
+    `message_id` available (the real `SimpleJobEnvelope` producer today), the job's own id
+    is the fallback parent pointer, the same simplification the TypeScript ingestion worker
+    already makes.
     """
-    return _message_id.get()
+    return _message_id.get() or _job_id.get()

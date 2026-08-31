@@ -103,7 +103,17 @@ def test_worker_boots_to_ready_and_stops_cleanly(
         assert health.json()["live"] is True
         assert ready.status_code == 200
         assert ready.json()["ready"] is True
-        assert ready.json()["model_id"] == "stub-model-v0"
+        # worker-gpu's TTS provider is still Phase 1 scaffolding and reports the
+        # configured MODEL_ID placeholder verbatim; worker-ai's model provider is now
+        # Phase 3's real deterministic analyzer and reports its own resolved identity
+        # instead (see SemanticAnalyzerModelProvider.model_id) -- not the MODEL_ID
+        # env var, which the semantic-analysis path no longer reads.
+        expected_model_id = (
+            "stub-model-v0"
+            if which == "gpu"
+            else "audio-book-nlp/deterministic-heuristic-analyzer@1.0.0"
+        )
+        assert ready.json()["model_id"] == expected_model_id
         assert ready.json()["state"] in ("MODEL_READY", "IDLE")
 
     # Leaving the context runs the lifespan shutdown, i.e. the real drain sequence.
@@ -191,20 +201,44 @@ def test_drain_stops_the_consumer(
 
 
 @pytest.mark.usefixtures("_stub_dependencies")
-def test_stub_providers_do_no_real_work(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Guard against a stub quietly acquiring real behaviour.
+def test_worker_gpu_stub_does_no_real_work() -> None:
+    """Guard against worker-gpu's stub quietly acquiring real behaviour.
 
-    If someone later makes these providers do actual inference without replacing the
+    worker-gpu is untouched by Phase 3 (TTS synthesis is still out of scope) -- if
+    someone later makes this provider do actual inference without replacing the
     lifecycle, this test should be the thing that makes them stop and think.
     """
-    from worker_ai.main import StubDirectorModelProvider
     from worker_gpu.main import StubTTSProvider
 
-    for cls in (StubDirectorModelProvider, StubTTSProvider):
-        assert cls.__name__.startswith("Stub")
-        assert "STUB" in (cls.__doc__ or "")
+    assert StubTTSProvider.__name__.startswith("Stub")
+    assert "STUB" in (StubTTSProvider.__doc__ or "")
+    public = {n for n in dir(StubTTSProvider) if not n.startswith("_")}
+    assert public == {"model_id", "load", "unload", "is_loaded"}
 
-    # Neither provider exposes a synthesis/generation entry point at all.
-    for cls in (StubDirectorModelProvider, StubTTSProvider):
-        public = {n for n in dir(cls) if not n.startswith("_")}
-        assert public == {"model_id", "load", "unload", "is_loaded"}
+
+def test_worker_ai_model_provider_is_a_real_analyzer_not_a_stub() -> None:
+    """worker-ai's `ModelProvider` is Phase 3's real (if modest) narrative-understanding
+    analyzer, not Phase 1 scaffolding -- `SemanticAnalyzerModelProvider` must expose
+    only the `ModelProvider` protocol surface (never an analysis method of its own,
+    which would let handler code bypass the `SemanticAnalyzer` seam), and `model_id`
+    must reflect the real, resolvable model identity the deterministic analyzer
+    advertises -- never a Phase-1-style placeholder string."""
+    from worker_ai.main import SemanticAnalyzerModelProvider
+    from worker_ai.semantic.deterministic import DeterministicSemanticAnalyzer
+
+    provider = SemanticAnalyzerModelProvider(DeterministicSemanticAnalyzer())
+    public = {n for n in dir(SemanticAnalyzerModelProvider) if not n.startswith("_")}
+    assert public == {"model_id", "load", "unload", "is_loaded"}
+    assert provider.model_id == "audio-book-nlp/deterministic-heuristic-analyzer@1.0.0"
+
+
+def test_worker_ai_director_job_types_remain_unimplemented() -> None:
+    """`generate_director_ir`/`revise_director_ir` are Phase 4 -- confirms no handler
+    module for either exists yet in worker-ai, i.e. nothing in this phase produces a
+    speaker/emotion/pacing decision or Audio Script IR."""
+    import importlib.util
+
+    for module_name in ("generate_director_ir", "revise_director_ir"):
+        assert (
+            importlib.util.find_spec(f"worker_ai.handlers.{module_name}") is None
+        ), f"worker_ai.handlers.{module_name} must not exist yet -- Director generation is Phase 4"

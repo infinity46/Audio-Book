@@ -21,6 +21,7 @@ COPY packages/events/package.json packages/events/package.json
 COPY packages/queue/package.json packages/queue/package.json
 COPY packages/storage/package.json packages/storage/package.json
 COPY packages/observability/package.json packages/observability/package.json
+COPY packages/ingestion/package.json packages/ingestion/package.json
 COPY prisma prisma
 RUN pnpm install --frozen-lockfile
 

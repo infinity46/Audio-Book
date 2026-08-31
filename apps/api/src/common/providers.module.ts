@@ -13,6 +13,7 @@ import { MetricsRegistry } from '@audio-book/observability';
 import { QueueManager } from '@audio-book/queue';
 import { S3StorageProvider, type StorageProvider } from '@audio-book/storage';
 import { Redis } from 'ioredis';
+import { IdempotencyService } from './idempotency.service.js';
 import {
   API_CONFIG,
   LOGGER,
@@ -78,12 +79,21 @@ const storageProvider = {
 };
 
 /**
- * Phase 1's OutboxPublisher.publish transport: relays a claimed row onto the
- * `maintenance` BullMQ queue as an event-shaped job. This stands in for the
- * generic event-broadcast channel event-contracts.md describes — a proper
- * per-event routing/broadcast mechanism is out of scope until real business
- * events exist; today only the synthetic Phase 1 integration test produces
- * outbox rows at all.
+ * Phase 1's OutboxPublisher.publish transport relayed EVERY outbox row onto
+ * the `maintenance` BullMQ queue as an event-shaped job, because the only
+ * outbox row ever produced at the time was the synthetic `job.created`
+ * (`cleanup_artifacts`) row the Phase 1 integration test creates —
+ * `processMaintenanceJob` unconditionally treats that row's `entity_id` as
+ * a ProcessingJob id and marks it SUCCEEDED. Phase 2 introduces real
+ * domain events (`book.uploaded`, `book.parsed`, `book.parse_failed`,
+ * `book.structure_ready`) whose `entity_id`/aggregate is NOT a
+ * ProcessingJob id — routing those through the same path would silently
+ * flip the status of an unrelated job. There is no real event-broadcast
+ * consumer for domain events yet (no Director, no SSE — later phases), so
+ * they are acknowledged (marked PUBLISHED) without being forwarded
+ * anywhere: the Outbox's job here is durability, not fabricating a
+ * distribution mechanism that doesn't exist. The one existing test path
+ * keeps working unchanged.
  */
 const outboxPublisherProvider = {
   provide: OUTBOX_PUBLISHER,
@@ -98,27 +108,38 @@ const outboxPublisherProvider = {
       pollIntervalMs: config.outboxPublisher.pollIntervalMs,
       batchSize: config.outboxPublisher.batchSize,
       publish: async (row: ClaimedOutboxRow) => {
-        await queueManager.enqueue(
-          'maintenance',
-          {
-            job_id: row.id,
-            entity_id: row.aggregateId,
-            correlation_id: row.correlationId,
-            tenant_id: row.tenantId,
-            payload: {
-              event_id: row.eventId,
-              event_type: row.eventType,
-              schema_version: row.schemaVersion,
-              payload: row.payload,
+        const payload = row.payload as { job_type?: string } | undefined;
+        if (row.eventType === 'job.created' && payload?.job_type === 'cleanup_artifacts') {
+          await queueManager.enqueue(
+            'maintenance',
+            {
+              job_id: row.id,
+              entity_id: row.aggregateId,
+              correlation_id: row.correlationId,
+              tenant_id: row.tenantId,
+              payload: {
+                event_id: row.eventId,
+                event_type: row.eventType,
+                schema_version: row.schemaVersion,
+                payload: row.payload,
+              },
             },
-          },
-          { jobName: row.eventType, maxAttempts: 5 },
+            { jobName: row.eventType, maxAttempts: 5 },
+          );
+          return;
+        }
+
+        logger.info(
+          { event_id: row.eventId, event_type: row.eventType, book_id: row.bookId },
+          'Outbox event durably published (no downstream broadcast consumer yet)',
         );
       },
       onError: (err) => logError(logger, err, 'Outbox publish failed for a batch row'),
     }),
   inject: [PRISMA, QUEUE_MANAGER, API_CONFIG, LOGGER],
 };
+
+const idempotencyServiceProvider = IdempotencyService;
 
 /**
  * Global module wiring every shared infrastructure dependency exactly once
@@ -137,6 +158,7 @@ const outboxPublisherProvider = {
     queueManagerProvider,
     storageProvider,
     outboxPublisherProvider,
+    idempotencyServiceProvider,
   ],
   exports: [
     API_CONFIG,
@@ -147,6 +169,7 @@ const outboxPublisherProvider = {
     QUEUE_MANAGER,
     STORAGE_PROVIDER,
     OUTBOX_PUBLISHER,
+    IdempotencyService,
   ],
 })
 // Graceful shutdown (stop intake -> drain -> close DB/Redis/queue -> flush

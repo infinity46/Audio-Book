@@ -7,9 +7,11 @@ import { ProvidersModule } from './common/providers.module.js';
 import { LOGGER } from './common/tokens.js';
 import { HealthModule } from './health/health.module.js';
 import { MaintenanceModule } from './maintenance/maintenance.module.js';
+import { BooksModule } from './books/books.module.js';
+import { AnalysisModule } from './analysis/analysis.module.js';
 
 @Module({
-  imports: [ProvidersModule, HealthModule, MaintenanceModule],
+  imports: [ProvidersModule, HealthModule, MaintenanceModule, BooksModule, AnalysisModule],
   providers: [
     {
       provide: APP_FILTER,

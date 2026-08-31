@@ -25,6 +25,7 @@
     "db:seed": "tsx infra/scripts/seed.ts"
   },
   "devDependencies": {
+    "@audio-book/api": "workspace:*",
     "@audio-book/config": "workspace:*",
     "@audio-book/contracts": "workspace:*",
     "@audio-book/database": "workspace:*",

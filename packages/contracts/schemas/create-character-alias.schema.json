@@ -1,0 +1,34 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["surface_form", "alias_type"],
+  "properties": {
+    "surface_form": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "alias_type": {
+      "type": "string",
+      "enum": [
+        "GIVEN_NAME",
+        "FULL_NAME",
+        "SURNAME",
+        "NICKNAME",
+        "TITLE",
+        "EPITHET",
+        "DESCRIPTOR",
+        "RELATIONAL"
+      ]
+    },
+    "valid_from_spine": { "type": ["integer", "null"], "minimum": 0 },
+    "valid_to_spine": { "type": ["integer", "null"], "minimum": 0 },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": { "type": "string", "enum": ["GLOBAL", "CHAPTER", "SPEAKER"] },
+        "chapter_id": { "type": ["string", "null"], "format": "uuid" },
+        "speaker_character_id": { "type": ["string", "null"], "format": "uuid" }
+      }
+    }
+  }
+}

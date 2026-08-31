@@ -4,9 +4,17 @@ import { createLogger, logError, runWithCorrelation } from '@audio-book/logging'
 import { WorkerHealthStateMachine } from '@audio-book/observability';
 import { QueueManager, type QueueJobEnvelope } from '@audio-book/queue';
 import { S3StorageProvider } from '@audio-book/storage';
+import {
+  TesseractOcrProvider,
+  UnavailableOcrProvider,
+  defaultIngestionConfig,
+  type IngestionConfig,
+  type OCRProvider,
+} from '@audio-book/ingestion';
 import { Redis } from 'ioredis';
 import { startHealthServer } from './health-server.js';
 import { processMaintenanceJob, type MaintenanceEventPayload } from './processors/maintenance.js';
+import { processIngestionJob, type ParseBookCommandPayload } from './processors/ingestion.js';
 
 // Setup below is synchronous, but main() stays async so `main().catch(...)`
 // below catches synchronous throws the same way it catches rejected
@@ -30,6 +38,20 @@ async function main(): Promise<void> {
   const redis = new Redis(config.secrets.redisUrl, { maxRetriesPerRequest: 3 });
   const storage = new S3StorageProvider(config.secrets.storage);
   const queueManager = new QueueManager({ redisUrl: config.secrets.redisUrl });
+  const ingestionConfig: IngestionConfig = {
+    ...defaultIngestionConfig(),
+    ...config.ingestion,
+    ocrLanguage: config.ocr.language,
+    ocrTimeoutMs: config.ocr.timeoutMs,
+    ocrRasterScale: config.ocr.rasterScale,
+  };
+  // Provider SELECTION lives here (the worker's call site), not in
+  // @audio-book/ingestion's config — swapping the OCR engine later is a
+  // one-line change to this construction, never a change to the pipeline
+  // or the domain model (task §119/§120).
+  const ocrProvider: OCRProvider = config.ocr.enabled
+    ? new TesseractOcrProvider({ language: config.ocr.language, langPath: config.ocr.langPath })
+    : new UnavailableOcrProvider();
 
   stateMachine.transition('HEALTHY');
   // worker-cpu runs deterministic, non-AI, non-GPU work — there is no model
@@ -73,9 +95,43 @@ async function main(): Promise<void> {
 
   worker.on('error', (err) => logError(logger, err, 'Worker error'));
 
+  const INGESTION_MAX_ATTEMPTS = 3;
+  const ingestionWorker = queueManager.createWorker<ParseBookCommandPayload>(
+    'parse',
+    async (job) => {
+      stateMachine.transition('PROCESSING');
+      const envelope: QueueJobEnvelope<ParseBookCommandPayload> = job.data;
+      try {
+        await runWithCorrelation(
+          {
+            correlationId: envelope.correlation_id,
+            jobId: envelope.job_id,
+            workerId: config.app.serviceName,
+          },
+          () =>
+            processIngestionJob({
+              prisma,
+              storage,
+              logger,
+              envelope,
+              config: ingestionConfig,
+              ocrProvider,
+              attemptsMade: job.attemptsMade,
+              maxAttempts: INGESTION_MAX_ATTEMPTS,
+            }),
+        );
+      } finally {
+        stateMachine.transition('IDLE');
+      }
+    },
+    { concurrency: config.worker.concurrency, maxAttempts: INGESTION_MAX_ATTEMPTS },
+  );
+
+  ingestionWorker.on('error', (err) => logError(logger, err, 'Ingestion worker error'));
+
   logger.info(
     { concurrency: config.worker.concurrency },
-    `${config.app.serviceName} ready, consuming maintenance queue`,
+    `${config.app.serviceName} ready, consuming maintenance and parse queues`,
   );
 
   const shutdown = async (signal: string): Promise<void> => {
@@ -83,6 +139,7 @@ async function main(): Promise<void> {
     stateMachine.transition('DRAINING');
     try {
       await queueManager.close();
+      await ocrProvider.terminate?.();
       await disconnectPrisma(prisma);
       redis.disconnect();
       healthServer.close();

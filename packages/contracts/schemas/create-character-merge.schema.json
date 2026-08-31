@@ -1,0 +1,16 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["operation", "losing_character_id", "winning_character_id"],
+  "properties": {
+    "operation": { "type": "string", "enum": ["MERGE", "SPLIT"] },
+    "losing_character_id": { "type": "string", "format": "uuid" },
+    "winning_character_id": { "type": "string", "format": "uuid" },
+    "voice_conflict_resolution": {
+      "type": ["object", "null"],
+      "additionalProperties": true
+    },
+    "rebind_scope": { "type": "string", "enum": ["AFFECTED_CHUNKS_ONLY"] }
+  }
+}

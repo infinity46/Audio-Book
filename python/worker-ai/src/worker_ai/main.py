@@ -1,97 +1,96 @@
-"""worker-ai -- the Director / LLM worker. Consumes the `ai` queue.
+"""worker-ai -- the Director / narrative-understanding worker. Consumes the `ai` queue.
 
-PHASE 1 SCAFFOLDING. This module wires configuration, logging, health and queue
-consumption together and proves the lifecycle reaches MODEL_READY. It performs **no LLM
-work of any kind**: there is no prompt construction, no context bundling, no model call,
-and no IR generation anywhere in this service yet.
-
-Job types this worker will eventually own (`event-contracts.md` §5.2, `ai` queue):
-`analyze_scene`, `build_story_bible_delta`, `generate_director_ir`, `revise_director_ir`.
-None of them are implemented. The handler below accepts a job, logs it, and returns.
+Phase 3 implements two of this worker's four eventual job types for real:
+`analyze_scene` and `build_story_bible_delta` (narrative understanding -- character
+registry, scenes, relationships, Story Bible, narrative state). `generate_director_ir`
+and `revise_director_ir` (the Director itself -- speaker/emotion/pacing decisions,
+Audio Script IR) remain an explicit no-op stub: that is Phase 4, and nothing in this
+module produces a performance decision of any kind.
 """
 
 from __future__ import annotations
 
-import asyncio
+from collections.abc import Awaitable, Callable
 
 from fastapi import FastAPI
 
+from worker_ai.handlers.analyze_scene import handle_analyze_scene
+from worker_ai.handlers.build_story_bible_delta import handle_build_story_bible_delta
+from worker_ai.queue_producer import BullMqAiQueueProducer, QueueProducer
+from worker_ai.semantic import SemanticAnalyzer, build_semantic_analyzer, load_semantic_config
 from workers_common import (
-    CommandEnvelope,
-    WorkerSettings,
     get_logger,
     load_settings_or_exit,
 )
+from workers_common.queue import JobContext
 from workers_common.runtime import create_worker_app
 
 log = get_logger(__name__)
 
 
-class StubDirectorModelProvider:
-    """A STUB. It loads nothing and cannot generate anything.
+class SemanticAnalyzerModelProvider:
+    """Adapts a `SemanticAnalyzer` to `workers_common.runtime.ModelProvider`.
 
-    This exists for exactly one reason: to prove that the HEALTHY -> MODEL_READY transition
-    and the readiness endpoint work end to end. It is not a partial implementation of a
-    Director model, and it must never be presented or measured as one.
-
-    `load()` sleeps briefly and flips ready. That sleep is a deliberate placeholder for the
-    real load's latency, so the "health endpoints must answer during model load" property
-    of the startup path is actually exercised rather than assumed.
-
-    Replacing this with a real provider means implementing the `ModelProvider` protocol
-    against an actual LLM backend (a hosted API client, or vLLM if the deployment
-    self-hosts). The lifecycle around it does not change.
+    The deterministic analyzer needs no loading at all -- `load()` is an immediate
+    no-op, and MODEL_READY is reached as soon as dependencies (DB/Redis/storage) are
+    verified. An `openai_compatible` analyzer similarly performs no eager connection
+    check here (the endpoint is verified on first real use); this keeps the startup
+    path identical regardless of which provider `SEMANTIC_ANALYZER_PROVIDER` selects.
     """
 
-    def __init__(self, settings: WorkerSettings) -> None:
-        self._settings = settings
-        self._loaded = False
+    def __init__(self, analyzer: SemanticAnalyzer) -> None:
+        self._analyzer = analyzer
 
     @property
     def model_id(self) -> str:
-        return self._settings.model.model_id
+        identity = self._analyzer.model_identity
+        return f"{identity.provider_id}/{identity.model_id}@{identity.version}"
 
     async def load(self) -> None:
-        log.warning(
-            "model.stub_load",
-            model_id=self.model_id,
-            note="STUB provider: no model is being loaded. Phase 1 scaffolding only.",
-        )
-        await asyncio.sleep(0.1)  # placeholder for real load latency
-        self._loaded = True
+        log.info("semantic_analyzer.ready", model_id=self.model_id)
 
     async def unload(self) -> None:
-        self._loaded = False
-        log.info("model.stub_unloaded", model_id=self.model_id)
+        aclose = getattr(self._analyzer, "aclose", None)
+        if aclose is not None:
+            await aclose()
 
     @property
     def is_loaded(self) -> bool:
-        return self._loaded
+        return True
 
 
-async def handle_job(envelope: CommandEnvelope) -> None:
-    """STUB handler. Accepts a job, logs it, does nothing.
+def _build_handler(
+    analyzer: SemanticAnalyzer, queue_producer: QueueProducer
+) -> Callable[[JobContext], Awaitable[None]]:
+    async def handle_job(ctx: JobContext) -> None:
+        if ctx.message_type == "analyze_scene":
+            await handle_analyze_scene(ctx, analyzer=analyzer, queue_producer=queue_producer)
+        elif ctx.message_type == "build_story_bible_delta":
+            await handle_build_story_bible_delta(ctx, queue_producer=queue_producer)
+        elif ctx.message_type in ("generate_director_ir", "revise_director_ir"):
+            log.info(
+                "job.received_by_stub",
+                message_type=ctx.message_type,
+                note="STUB handler: the Director is Phase 4. No IR is generated here.",
+            )
+        else:
+            log.warning("job.unknown_message_type", message_type=ctx.message_type)
 
-    Every id needed for correlation is already bound to the logging context by the time
-    this runs (see `workers_common.correlation`), so nothing here passes ids explicitly.
-
-    NOTE the deliberate absence of `envelope.payload` in the log call: an `ai`-queue payload
-    references book content, and the logging contract forbids putting that in the log
-    stream. Only the message type and identifiers are logged.
-    """
-    log.info(
-        "job.received_by_stub",
-        message_type=envelope.message_type.value,
-        note="STUB handler: no Director work is performed. Phase 1 scaffolding only.",
-    )
+    return handle_job
 
 
 def create_app() -> FastAPI:
     settings = load_settings_or_exit()
+    semantic_config = load_semantic_config()
+    analyzer = build_semantic_analyzer(semantic_config)
+    queue_producer: QueueProducer = BullMqAiQueueProducer(
+        redis_url=str(settings.secrets.redis_url), queue_prefix=settings.app.queue_prefix
+    )
+
     return create_worker_app(
         settings=settings,
-        model_provider=StubDirectorModelProvider(settings),
-        handler=handle_job,
+        model_provider=SemanticAnalyzerModelProvider(analyzer),
+        handler=_build_handler(analyzer, queue_producer),
     )
 
 

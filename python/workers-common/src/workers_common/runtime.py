@@ -92,7 +92,7 @@ class WorkerRuntime:
         )
         self.db = Database(settings)
         self.storage = ObjectStorage(settings)
-        self.consumer = QueueConsumer(settings, self.health, handler)
+        self.consumer = QueueConsumer(settings, self.health, handler, self.db, self.storage)
         self._shutdown_complete = asyncio.Event()
 
     # ------------------------------------------------------------- startup

@@ -42,8 +42,11 @@ __all__ = [
     "JobPriority",
     "MessageType",
     "QueueName",
+    "SimpleJobEnvelope",
+    "new_event",
     "new_id",
     "utc_now",
+    "write_outbox_message",
 ]
 
 
@@ -223,6 +226,40 @@ class CommandEnvelope(_Envelope):
         return queue_for(self.message_type)
 
 
+class SimpleJobEnvelope(BaseModel):
+    """The envelope the TypeScript `QueueManager` actually produces.
+
+    `event-contracts.md` §6.1 specifies a much richer `CommandEnvelope` (message_id,
+    message_type, schema_version, enqueued_at, attempt, lease_fence, idempotency_key,
+    priority, producer, producer_version, ...) as the aspirational command wire format.
+    But the real TypeScript producer -- `packages/queue/src/job-payload.ts`'s
+    `QueueJobEnvelope`, used by every `QueueManager.enqueue()` call in `apps/api` and
+    `apps/worker-cpu` -- only ever writes `{job_id, entity_id?, version_id?,
+    correlation_id, causation_id?, tenant_id, payload}` onto the BullMQ job. No producer
+    in this codebase builds the fuller `CommandEnvelope` shape.
+
+    Rather than have every real handler fail `CommandEnvelope.model_validate(job.data)`
+    against fields that were never sent, this model matches what is actually on the
+    wire today. The job's *type* is not a payload field at all in that producer -- it is
+    BullMQ's own `job.name` (the `jobName` enqueue option) -- so `QueueConsumer` reads
+    that separately and attaches it to `JobContext.message_type` (see `queue.py`).
+
+    This is a deliberate, documented adaptation to the real Phase 1/2 producer contract,
+    not a silent narrowing of `event-contracts.md` -- `CommandEnvelope` stays available
+    for a future producer that emits the fuller envelope.
+    """
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    job_id: uuid.UUID
+    entity_id: uuid.UUID | None = None
+    version_id: uuid.UUID | None = None
+    correlation_id: uuid.UUID
+    causation_id: uuid.UUID | None = None
+    tenant_id: uuid.UUID
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
 class EventEnvelope(_Envelope):
     """§7.1. A fact that has already happened.
 
@@ -250,6 +287,80 @@ class EventEnvelope(_Envelope):
     @field_serializer("occurred_at")
     def _ser_occurred_at(self, value: datetime) -> str:
         return _rfc3339(value)
+
+
+async def write_outbox_message(
+    session: Any,
+    *,
+    event_type: str,
+    schema_version: str,
+    producer: str,
+    producer_version: str,
+    tenant_id: uuid.UUID,
+    correlation_id: uuid.UUID,
+    causation_id: uuid.UUID,
+    aggregate_type: str,
+    aggregate_id: uuid.UUID,
+    payload: dict[str, Any],
+    book_id: uuid.UUID | None = None,
+    job_id: uuid.UUID | None = None,
+    traceparent: str | None = None,
+) -> uuid.UUID:
+    """The Python half of `writeOutboxMessage` (`packages/events/src/outbox.ts`).
+
+    Inserts one `outbox_message` row via the SAME `AsyncSession` (and therefore the same
+    transaction) as the domain writes the caller just made -- `db.py`'s `Database.session()`
+    only commits once, at the end of the `async with` block, so this row becomes visible
+    exactly when the domain state it describes does (event-contracts.md §19.2). Raw SQL,
+    not an ORM model: `workers_common/db.py` deliberately has none (the schema is owned by
+    Prisma/`database-schema.md`).
+
+    Returns the freshly-minted `event_id` -- the identity of the fact, stable across every
+    redelivery the (TypeScript, cross-language) `OutboxPublisher` relay ever attempts for
+    this row.
+    """
+    import json as _json
+
+    from sqlalchemy import text
+
+    event_id = new_id()
+    row_id = new_id()
+    await session.execute(
+        text(
+            """
+            INSERT INTO outbox_message (
+                id, event_id, event_type, schema_version, occurred_at,
+                tenant_id, book_id, job_id, correlation_id, causation_id, traceparent,
+                producer, producer_version, payload, aggregate_type, aggregate_id,
+                status, publish_attempts, created_at
+            ) VALUES (
+                :id, :event_id, :event_type, :schema_version, :occurred_at,
+                :tenant_id, :book_id, :job_id, :correlation_id, :causation_id, :traceparent,
+                :producer, :producer_version, CAST(:payload AS JSONB),
+                :aggregate_type, :aggregate_id, 'PENDING', 0, :occurred_at
+            )
+            """
+        ),
+        {
+            "id": str(row_id),
+            "event_id": str(event_id),
+            "event_type": event_type,
+            "schema_version": schema_version,
+            "occurred_at": utc_now(),
+            "tenant_id": str(tenant_id),
+            "book_id": str(book_id) if book_id else None,
+            "job_id": str(job_id) if job_id else None,
+            "correlation_id": str(correlation_id),
+            "causation_id": str(causation_id),
+            "traceparent": traceparent,
+            "producer": producer,
+            "producer_version": producer_version,
+            "payload": _json.dumps(payload),
+            "aggregate_type": aggregate_type,
+            "aggregate_id": str(aggregate_id),
+        },
+    )
+    return event_id
 
 
 def _rfc3339(value: datetime) -> str:

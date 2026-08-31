@@ -1,0 +1,27 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "file_name",
+    "declared_mime_type",
+    "declared_size_bytes",
+    "declared_content_hash",
+    "source_kind"
+  ],
+  "properties": {
+    "file_name": { "type": "string", "minLength": 1, "maxLength": 255 },
+    "declared_mime_type": { "type": "string", "minLength": 1, "maxLength": 255 },
+    "declared_size_bytes": { "type": "integer", "exclusiveMinimum": 0 },
+    "declared_content_hash": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["algorithm", "value"],
+      "properties": {
+        "algorithm": { "type": "string", "enum": ["SHA256"] },
+        "value": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
+    "source_kind": { "type": "string", "enum": ["PDF", "EPUB"] }
+  }
+}

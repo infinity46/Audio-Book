@@ -1,0 +1,18 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["scope", "mode"],
+  "properties": {
+    "scope": { "type": "string", "enum": ["BOOK", "CHAPTERS"] },
+    "chapter_ids": {
+      "type": "array",
+      "items": { "type": "string", "format": "uuid" },
+      "minItems": 1,
+      "maxItems": 500
+    },
+    "mode": { "type": "string", "enum": ["INCREMENTAL", "REBUILD"] },
+    "force": { "type": "boolean" },
+    "priority": { "type": "string", "enum": ["INTERACTIVE", "NORMAL", "BULK"] }
+  }
+}

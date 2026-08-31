@@ -30,11 +30,11 @@ import asyncio
 from fastapi import FastAPI
 
 from workers_common import (
-    CommandEnvelope,
     WorkerSettings,
     get_logger,
     load_settings_or_exit,
 )
+from workers_common.queue import JobContext
 from workers_common.runtime import create_worker_app
 
 log = get_logger(__name__)
@@ -91,17 +91,17 @@ class StubTTSProvider:
         return self._loaded
 
 
-async def handle_job(envelope: CommandEnvelope) -> None:
+async def handle_job(ctx: JobContext) -> None:
     """STUB handler. Accepts a job, logs it, synthesizes nothing.
 
-    It returns normally, which acks the job. That is correct for Phase 1 -- there is no
-    queue wired to a real producer yet -- but it is the single most important line to
-    change when real synthesis lands: acking without producing audio would silently mark
-    chunks complete.
+    It returns normally, which acks the job. That is correct for Phase 1/3 -- worker-gpu's
+    real job types (`generate_tts_chunk`, `generate_voice_preview`) are TTS work, out of
+    scope through Phase 3 -- but it is the single most important line to change when real
+    synthesis lands: acking without producing audio would silently mark chunks complete.
     """
     log.info(
         "job.received_by_stub",
-        message_type=envelope.message_type.value,
+        message_type=ctx.message_type,
         note="STUB handler: no synthesis is performed and no audio is produced. "
         "Phase 1 scaffolding only.",
     )
