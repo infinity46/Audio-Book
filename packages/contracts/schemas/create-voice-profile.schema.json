@@ -1,0 +1,17 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["name", "scope"],
+  "properties": {
+    "name": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "description": { "type": "string", "maxLength": 2000 },
+    "scope": { "type": "string", "enum": ["TENANT", "BOOK"] },
+    "book_id": { "type": "string", "format": "uuid" },
+    "intended_character_ids": {
+      "type": "array",
+      "items": { "type": "string", "format": "uuid" },
+      "maxItems": 100
+    }
+  }
+}

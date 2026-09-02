@@ -411,13 +411,29 @@ async def test_full_two_chapter_analysis_chain_against_real_postgres(real_db: Da
 
             characters = (
                 await session.execute(
-                    text("SELECT display_name, status FROM character WHERE book_id = :b"),
+                    text(
+                        "SELECT display_name, status, is_sentinel FROM character WHERE book_id = :b"
+                    ),
                     {"b": fx.book_id},
                 )
             ).all()
             names = {row[0] for row in characters}
             assert "Alice Carter" in names
-            assert all(row[1] == "PROVISIONAL" for row in characters)
+
+            # Characters *discovered* from the text are claims, and must never be
+            # auto-confirmed -- that is what this assertion is protecting.
+            discovered = [row for row in characters if not row[2]]
+            assert discovered, "analysis found no non-sentinel characters"
+            assert all(row[1] == "PROVISIONAL" for row in discovered)
+
+            # Sentinels (NARRATOR/UNKNOWN) are a different class: infrastructure
+            # rows, deliberately CONFIRMED, created during analysis so the
+            # narrator is castable before the Director runs (QA finding F-22).
+            # This assertion used to read "all characters are PROVISIONAL",
+            # which predated sentinels being created here at all.
+            sentinels = [row for row in characters if row[2]]
+            assert sentinels, "analysis must create the sentinel characters (F-22)"
+            assert all(row[1] == "CONFIRMED" for row in sentinels)
 
             scene_count = (
                 await session.execute(

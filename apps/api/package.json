@@ -4,14 +4,21 @@
   "private": true,
   "type": "module",
   "exports": {
-    "./analysis/analysis.service": "./dist/analysis/analysis.service.js"
+    "./analysis/analysis.service": "./dist/analysis/analysis.service.js",
+    "./assembly/assembly.service": "./dist/assembly/assembly.service.js",
+    "./books/books.service": "./dist/books/books.service.js",
+    "./director/director.service": "./dist/director/director.service.js",
+    "./tts/tts.service": "./dist/tts/tts.service.js",
+    "./voice/voice.service": "./dist/voice/voice.service.js",
+    "./common/rate-limit/rate-limiter": "./dist/common/rate-limit/rate-limiter.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "start:dev": "tsx watch src/main.ts",
+    "start:dev": "tsc -p tsconfig.json && node --watch dist/main.js",
     "start": "node dist/main.js",
-    "test": "vitest run"
+    "test": "vitest run",
+    "build:watch": "tsc -p tsconfig.json --watch --preserveWatchOutput"
   },
   "dependencies": {
     "@audio-book/config": "workspace:*",

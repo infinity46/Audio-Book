@@ -7,15 +7,7 @@
 
 export interface CreateCharacterAlias {
   surface_form: string;
-  alias_type:
-    | 'GIVEN_NAME'
-    | 'FULL_NAME'
-    | 'SURNAME'
-    | 'NICKNAME'
-    | 'TITLE'
-    | 'EPITHET'
-    | 'DESCRIPTOR'
-    | 'RELATIONAL';
+  alias_type: 'GIVEN_NAME' | 'FULL_NAME' | 'SURNAME' | 'NICKNAME' | 'TITLE' | 'EPITHET' | 'DESCRIPTOR' | 'RELATIONAL';
   valid_from_spine?: number | null;
   valid_to_spine?: number | null;
   scope?: {

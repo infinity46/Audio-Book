@@ -49,6 +49,11 @@ function makeFakePrisma() {
           ),
       ),
       findUnique: vi.fn(),
+      update: vi.fn(({ where, data }: { where: { id: string }; data: Record<string, unknown> }) => {
+        const job = processingJobs.find((j) => j.id === where.id);
+        if (job) Object.assign(job, data);
+        return Promise.resolve(job);
+      }),
     },
     book: {
       update: vi.fn(({ where, data }: { where: { id: string }; data: Record<string, unknown> }) => {

@@ -723,8 +723,10 @@ enum ResourceType {
   story_bible_version
   voice_profile
   voice_profile_version
+  voice_preview
   audio_script
   audio_script_chunk
+  tts_job
   audio_chunk
   chapter_audio
   audiobook
@@ -3025,6 +3027,18 @@ model ProcessingJob {
   relatedResourceType ResourceType @map("related_resource_type")
   relatedResourceId   String       @map("related_resource_id") @db.Uuid
   scope               Json?        @db.JsonB
+
+  /// The queue envelope this job intends to be dispatched with, written in the
+  /// SAME transaction as the row itself. Dispatch is two non-transactional
+  /// steps (commit the row, then enqueue), so a crash between them strands the
+  /// job forever. Recovering it requires knowing the payload, and most job
+  /// types' payloads are not reconstructable from this row alone
+  /// (remaining_chapter_ids, story_bible_version_id, ...). Persisting the
+  /// envelope here lets `ProcessingJobSweeper` re-dispatch ANY job type
+  /// generically instead of re-implementing each service's payload query
+  /// (QA finding F-4). Nullable: rows created before this column existed, and
+  /// jobs that are never queue-dispatched, legitimately have none.
+  dispatchEnvelope Json? @map("dispatch_envelope") @db.JsonB
 
   parentJobId        String? @map("parent_job_id") @db.Uuid
   childJobCount      Int     @default(0) @map("child_job_count")

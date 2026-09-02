@@ -14,6 +14,19 @@ describe('QueueManager (maintenance queue)', () => {
   let manager: QueueManager;
 
   afterEach(async () => {
+    // These tests deliberately create jobs with no backing ProcessingJob row —
+    // they exercise the queue mechanics alone. Left behind, a later test's
+    // worker on this same shared queue picks them up and fails trying to
+    // update a row that never existed, so the residue surfaces as a failure
+    // in an unrelated test (it did exactly that to final-integration).
+    // Obliterate rather than remove-by-id: the DLQ test's whole point is that
+    // entries outlive the job that produced them.
+    try {
+      await manager?.queue('maintenance').obliterate({ force: true });
+      await manager?.dlq('maintenance').obliterate({ force: true });
+    } catch {
+      /* best-effort tidy-up; never fail teardown over it */
+    }
     await manager?.close();
   });
 

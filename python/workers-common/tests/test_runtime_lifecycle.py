@@ -103,15 +103,16 @@ def test_worker_boots_to_ready_and_stops_cleanly(
         assert health.json()["live"] is True
         assert ready.status_code == 200
         assert ready.json()["ready"] is True
-        # worker-gpu's TTS provider is still Phase 1 scaffolding and reports the
-        # configured MODEL_ID placeholder verbatim; worker-ai's model provider is now
-        # Phase 3's real deterministic analyzer and reports its own resolved identity
-        # instead (see SemanticAnalyzerModelProvider.model_id) -- not the MODEL_ID
-        # env var, which the semantic-analysis path no longer reads.
+        # Both workers now report a resolved provider identity rather than the
+        # MODEL_ID env var: worker-ai via SemanticAnalyzerModelProvider (Phase 3's
+        # deterministic analyzer, composed with the Director provider) and
+        # worker-gpu via TTSModelProviderAdapter (Phase 5's TTS provider, `mock`
+        # by default). Neither echoes MODEL_ID any more.
         expected_model_id = (
-            "stub-model-v0"
+            "mock-tts/mock-tone@v1"
             if which == "gpu"
             else "audio-book-nlp/deterministic-heuristic-analyzer@1.0.0"
+            "+audio-book-director/deterministic-heuristic-director@1.0.0"
         )
         assert ready.json()["model_id"] == expected_model_id
         assert ready.json()["state"] in ("MODEL_READY", "IDLE")
@@ -201,18 +202,19 @@ def test_drain_stops_the_consumer(
 
 
 @pytest.mark.usefixtures("_stub_dependencies")
-def test_worker_gpu_stub_does_no_real_work() -> None:
-    """Guard against worker-gpu's stub quietly acquiring real behaviour.
+def test_worker_gpu_model_provider_exposes_only_the_protocol() -> None:
+    """worker-gpu's model provider is Phase 5's real TTS adapter, not a stub.
 
-    worker-gpu is untouched by Phase 3 (TTS synthesis is still out of scope) -- if
-    someone later makes this provider do actual inference without replacing the
-    lifecycle, this test should be the thing that makes them stop and think.
+    This guard originally asserted the OPPOSITE -- that a `StubTTSProvider` was
+    still in place -- and kept asserting it long after Phase 5 replaced it, so the
+    suite stayed red while claiming the system was unimplemented. It now pins the
+    property that actually matters: the adapter exposes only the `ModelProvider`
+    protocol surface, so handler code cannot reach past the seam to a provider
+    method of its own.
     """
-    from worker_gpu.main import StubTTSProvider
+    from worker_gpu.main import TTSModelProviderAdapter
 
-    assert StubTTSProvider.__name__.startswith("Stub")
-    assert "STUB" in (StubTTSProvider.__doc__ or "")
-    public = {n for n in dir(StubTTSProvider) if not n.startswith("_")}
+    public = {n for n in dir(TTSModelProviderAdapter) if not n.startswith("_")}
     assert public == {"model_id", "load", "unload", "is_loaded"}
 
 
@@ -232,13 +234,20 @@ def test_worker_ai_model_provider_is_a_real_analyzer_not_a_stub() -> None:
     assert provider.model_id == "audio-book-nlp/deterministic-heuristic-analyzer@1.0.0"
 
 
-def test_worker_ai_director_job_types_remain_unimplemented() -> None:
-    """`generate_director_ir`/`revise_director_ir` are Phase 4 -- confirms no handler
-    module for either exists yet in worker-ai, i.e. nothing in this phase produces a
-    speaker/emotion/pacing decision or Audio Script IR."""
-    import importlib.util
+def test_worker_ai_director_job_types_are_implemented() -> None:
+    """Director generation is implemented and reachable.
 
-    for module_name in ("generate_director_ir", "revise_director_ir"):
-        assert (
-            importlib.util.find_spec(f"worker_ai.handlers.{module_name}") is None
-        ), f"worker_ai.handlers.{module_name} must not exist yet -- Director generation is Phase 4"
+    This guard originally asserted that `generate_director_ir`/`revise_director_ir`
+    "must not exist yet", which was true in Phase 1 and false from Phase 4 onward --
+    so it failed for every run after Director landed while describing the system as
+    unimplemented. Inverted to assert what should now hold: both handler modules
+    exist and expose their handler entry point.
+    """
+    import importlib
+
+    for module_name, attr in (
+        ("generate_director_ir", "handle_generate_director_ir"),
+        ("revise_director_ir", "handle_revise_director_ir"),
+    ):
+        module = importlib.import_module(f"worker_ai.handlers.{module_name}")
+        assert callable(getattr(module, attr))

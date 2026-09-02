@@ -58,12 +58,42 @@ export function createLogger(options: LoggerOptions): PinoLogger {
 
 export type Logger = PinoLogger;
 
-/** Convenience for logging a caught error with its taxonomy code, when available. */
+/**
+ * Convenience for logging a caught error with its taxonomy code.
+ *
+ * Emits a safe diagnostic alongside the code: the error's own message, its
+ * class, and — for errors with no taxonomy code, i.e. the unexpected ones —
+ * the stack and the cause chain. Without these an operator sees only
+ * `UNKNOWN_ERROR` and has nothing to debug from, which is over-redaction
+ * rather than safety: nothing here is book text, a credential, or a signed
+ * URL, and every field still passes through `redactSensitiveFields` on the
+ * way out (see `createLogger`'s `logMethod` hook).
+ *
+ * Client-facing responses are unaffected — the API's error envelope never
+ * includes any of this (api-specification.md §8.2). This is the server-side
+ * log only.
+ */
 export function logError(logger: Logger, err: unknown, message?: string): void {
-  const errorCode =
-    typeof err === 'object' && err !== null && 'code' in err && typeof err.code === 'string'
-      ? err.code
-      : 'UNKNOWN_ERROR';
+  const hasCode =
+    typeof err === 'object' && err !== null && 'code' in err && typeof err.code === 'string';
+  const errorCode = hasCode ? (err as { code: string }).code : 'UNKNOWN_ERROR';
   const errorMessage = err instanceof Error ? err.message : 'Unknown error';
-  logger.error({ error_code: errorCode }, message ?? errorMessage);
+
+  const fields: Record<string, unknown> = {
+    error_code: errorCode,
+    error_message: errorMessage,
+  };
+  if (err instanceof Error) {
+    fields.error_class = err.constructor.name;
+    // An error carrying a taxonomy code is expected and self-describing; an
+    // uncoded one is a genuine surprise and is the case that needs a stack.
+    if (!hasCode) {
+      fields.error_stack = err.stack;
+      if (err.cause instanceof Error) {
+        fields.error_cause = `${err.cause.constructor.name}: ${err.cause.message}`;
+      }
+    }
+  }
+
+  logger.error(fields, message ?? errorMessage);
 }

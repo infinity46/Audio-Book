@@ -40,6 +40,17 @@ RUN mkdir -p /ocr-lang-data \
 FROM node:20.18.1-alpine3.20 AS runtime
 RUN corepack enable && corepack prepare pnpm@9.12.0 --activate \
   && addgroup -S app && adduser -S app -G app
+# Phase 6's audio assembly/mastering/packaging pipeline shells out to ffmpeg
+# (deployment-architecture.md:128, "CPU-heavy (FFmpeg)"). Reproducibility
+# comes from the pinned base image tag above (node:20.18.1-alpine3.20 fixes
+# the apk repo snapshot), not from a version string in this apk command —
+# `infra/scripts/seed.ts`'s AUDIO_TOOL_MODEL_VERSIONS entry records the
+# exact version this image is expected to ship (verify with `ffmpeg
+# -version` after building); the worker discovers and records the actual
+# installed version at runtime rather than assuming it, and every assembly
+# job fails loudly (DependencyFailureError) if the seeded entry doesn't
+# match — the same no-silent-fallback contract already used for OCR.
+RUN apk add --no-cache ffmpeg
 WORKDIR /repo
 ENV NODE_ENV=production
 ENV OCR_LANG_PATH=/repo/ocr-lang-data

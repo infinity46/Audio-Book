@@ -1,0 +1,53 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["scope"],
+  "properties": {
+    "scope": { "type": "string", "enum": ["BOOK", "CHAPTERS", "CHUNKS", "FILTER"] },
+    "chapter_ids": {
+      "type": "array",
+      "items": { "type": "string", "format": "uuid" },
+      "minItems": 1,
+      "maxItems": 500
+    },
+    "chunk_ids": {
+      "type": "array",
+      "items": { "type": "string", "format": "uuid" },
+      "minItems": 1,
+      "maxItems": 500
+    },
+    "filter": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "audio_chunk_status": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "PENDING",
+              "GENERATING",
+              "GENERATED",
+              "VALIDATED",
+              "ASSEMBLED",
+              "FAILED",
+              "INVALID",
+              "SUPERSEDED"
+            ]
+          },
+          "minItems": 1
+        },
+        "chapter_ids": {
+          "type": "array",
+          "items": { "type": "string", "format": "uuid" },
+          "minItems": 1
+        }
+      }
+    },
+    "force": { "type": "boolean" },
+    "acknowledge_partial_revoice": { "type": "boolean" },
+    "priority": { "type": "string", "enum": ["INTERACTIVE", "NORMAL", "BULK"] }
+  }
+}

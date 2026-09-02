@@ -26,6 +26,30 @@ describe('buildApiConfig', () => {
     expect(() => buildApiConfig(rest)).toThrow(/DATABASE_URL/);
   });
 
+  it('accepts a public key even when AUTH_JWT_JWKS_URL is present but empty', () => {
+    // `.env.example` ships `AUTH_JWT_JWKS_URL=`. An empty string must be
+    // treated as "not provided", not as a satisfied alternative — otherwise
+    // following the documented setup makes the API refuse to start.
+    const config = buildApiConfig({ ...validApiEnv, AUTH_JWT_JWKS_URL: '' });
+    expect(config.secrets.auth?.jwtJwksUrl).toBeUndefined();
+    expect(config.secrets.auth?.jwtPublicKey).toContain('BEGIN PUBLIC KEY');
+  });
+
+  it('still rejects a config where neither JWKS URL nor public key is usable', () => {
+    expect(() =>
+      buildApiConfig({ ...validApiEnv, AUTH_JWT_PUBLIC_KEY: '   ', AUTH_JWT_JWKS_URL: '' }),
+    ).toThrow(ConfigValidationError);
+  });
+
+  it('exposes the §14.3 rate-limit buckets with usable defaults', () => {
+    const config = buildApiConfig(validApiEnv);
+    expect(config.rateLimit.enabled).toBe(true);
+    expect(config.rateLimit.windowSeconds).toBeGreaterThan(0);
+    // Expensive work must never be more permissive than plain reads.
+    expect(config.rateLimit.buckets.expensive).toBeLessThan(config.rateLimit.buckets.read);
+    expect(config.rateLimit.buckets.upload).toBeLessThan(config.rateLimit.buckets.read);
+  });
+
   it('builds a well-shaped config split into app/http/secrets/models', () => {
     const config = buildApiConfig(validApiEnv);
     expect(config.app.serviceName).toBe('api');

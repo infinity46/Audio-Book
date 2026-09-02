@@ -29,7 +29,7 @@ import uuid
 from typing import Any
 
 from worker_ai.queue_producer import QueueProducer
-from worker_ai.repo import model_registry, reads, story_bible, writes_scene
+from worker_ai.repo import model_registry, reads, story_bible, writes_director, writes_scene
 from worker_ai.semantic import SemanticAnalyzer
 from worker_ai.semantic.schemas import AnalyzeChapterInput, PriorContext
 from workers_common.events import new_id, write_outbox_message
@@ -70,6 +70,25 @@ async def handle_analyze_scene(
         prior_state = await reads.load_latest_narrative_state(session, job.book_id)
         model_version_id = await model_registry.resolve_model_version_id(
             session, analyzer.model_identity
+        )
+        # The four sentinel Characters (NARRATOR / UNKNOWN_SPEAKER /
+        # MULTIPLE_SPEAKERS / SYSTEM) are Character Registry rows, and
+        # `context.md` §1.3 orders the pipeline Character Registry -> Voice
+        # Registry -> Director. Creating them here, with the rest of the
+        # registry, is what makes that order achievable: the narrator has to
+        # exist as a castable Character *before* casting, and casting has to
+        # happen before the Director, because the Director resolves each
+        # chunk's voice binding (falling back to the narrator's voice) as it
+        # builds the IR.
+        #
+        # Previously this ran only inside the Director, which inverted the
+        # order: the narrator could not be cast until a Director run had
+        # created it, so a first pass always produced narrator chunks with no
+        # voice and TTS then refused the book with CASTING_INCOMPLETE. See QA
+        # finding F-22. The Director still calls this too — it is idempotent,
+        # and that keeps the Director correct if it is ever run standalone.
+        await writes_director.ensure_sentinel_characters(
+            session, tenant_id=str(ctx.envelope.tenant_id), book_id=job.book_id
         )
         await writes_scene.mark_job_running(session, job_id)
 

@@ -126,6 +126,70 @@ export function buildDialoguePdf(): Promise<Buffer> {
   ]);
 }
 
+/**
+ * The Phase 7 golden book: one deterministic fixture combining every text
+ * property the end-to-end fidelity gate cares about — narrator prose,
+ * two-speaker dialogue with nested quotes, a line-break hyphenation, a
+ * chapter transition, numbers/dates, a foreign phrase, and OCR-style noise
+ * (a header and a bare page-number footer repeated on every page).
+ *
+ * Three pages is the minimum: `detectNoise` deliberately refuses to classify
+ * anything as repeated header/footer noise below three pages, so a shorter
+ * fixture would silently skip the noise-removal behavior under test.
+ */
+export function buildGoldenBookPdf(): Promise<Buffer> {
+  const header = 'THE GREAT BOOK';
+  return buildPdf([
+    {
+      header,
+      footer: '1',
+      lines: [
+        { text: 'Chapter 1', heading: true },
+        { text: 'The lighthouse keeper had counted 47 ships that winter, and' },
+        { text: 'not one of them had turned toward the harbour. It was truly an extra-' },
+        { text: 'ordinary season, even by the standards of the northern coast.' },
+      ],
+    },
+    {
+      header,
+      footer: '2',
+      lines: [
+        { text: '“Wait,” Alice said, “didn’t Bob tell you, ‘never go back,’ only yesterday?”' },
+        { text: '“He did,” Bob answered quietly. “I was there when he said it.”' },
+        { text: 'It was the 3rd of May, 1926, and she was 42 years old.' },
+        { text: 'She whispered, “C’est la vie,” and walked on without looking back.' },
+      ],
+    },
+    {
+      header,
+      footer: '3',
+      lines: [
+        { text: 'Chapter 2', heading: true },
+        { text: 'The second chapter opens on a quieter shore, far from the harbour,' },
+        { text: 'where nobody had counted ships in a very long time.' },
+      ],
+    },
+  ]);
+}
+
+/**
+ * A hyphenation broken across a PAGE boundary (not just a line break) — the
+ * common real-world OCR/print case `buildHyphenatedPdf` doesn't cover, since
+ * that one keeps both fragments on the same page.
+ */
+export function buildCrossPageHyphenatedPdf(): Promise<Buffer> {
+  return buildPdf([
+    {
+      lines: [
+        { text: 'Chapter 1', heading: true },
+        { text: 'It was truly an extra-' },
+      ],
+    },
+    { lines: [{ text: 'ordinary afternoon in the valley below the hills.' }] },
+    { lines: [{ text: 'The story continued for many pages after that one.' }] },
+  ]);
+}
+
 /** A truncated/malformed PDF (fixture #7). */
 export function buildMalformedPdf(): Buffer {
   return Buffer.from('%PDF-1.4\n1 0 obj\n<< this is not valid pdf content');

@@ -2,7 +2,16 @@ name: audio-book
 
 services:
   postgres:
-    image: postgres:16.6-alpine
+    # pgvector, not stock postgres: 0001_init runs `CREATE EXTENSION vector`,
+    # declares `narrative_embedding.embedding vector(1536)`, and builds an HNSW
+    # index on it. `postgres:16.6-alpine` ships no pgvector, so a fresh
+    # `docker compose up` + migrate fails outright, and an existing volume that
+    # was initialised under a pgvector image keeps its `pg_extension` row while
+    # the library underneath it is gone -- every vector operation then fails
+    # with `could not access file "$libdir/vector"`, including the `book`
+    # cascade delete that traverses `narrative_embedding` (QA finding F-8).
+    # Same PG major, so the on-disk format is unchanged.
+    image: pgvector/pgvector:pg16
     restart: unless-stopped
     environment:
       POSTGRES_USER: audiobook
@@ -164,12 +173,17 @@ services:
       STORAGE_BUCKET: audiobook-dev
       STORAGE_ACCESS_KEY_ID: minioadmin
       STORAGE_SECRET_ACCESS_KEY: minioadmin
-      # No GPU/TTS backend in local dev — StubTTSProvider only proves the
-      # HEALTHY -> MODEL_READY transition (deployment-architecture.md §6).
+      # MockTTSProvider (deployment-architecture.md §6's mandatory GPU-free dev
+      # capability) — deterministic tone synthesis, no GPU/model backend required.
+      # Set TTS_PROVIDER=kokoro (plus KOKORO_MODEL_PATH/KOKORO_VOICES_PATH, and
+      # build this image with --build-arg TTS_EXTRA=kokoro) to run the real
+      # CPU-capable engine instead.
       # worker-gpu is always its own deployment unit — never co-located with
       # any other service, even in local Compose — matching the mandatory GPU
-      # isolation rule from context.md §18 / tts-provider-specification.md.
-      MODEL_ID: stub-tts-v0
+      # isolation rule from context.md §18 / tts-provider-specification.md §3.1.
+      MODEL_ID: mock-tts-v0
+      TTS_PROVIDER: mock
+      TTS_MODEL_VERSION: v1
     ports:
       - "8082:8080"
     depends_on:

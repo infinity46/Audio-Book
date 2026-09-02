@@ -8,9 +8,13 @@ import {
   ValidationError,
 } from '@audio-book/errors';
 import { generateId, writeOutboxMessage } from '@audio-book/events';
-import { defaultIngestionConfig, detectFormat } from '@audio-book/ingestion';
+import {
+  defaultIngestionConfig,
+  detectFormat,
+  PARSER_VERSION_FOR_IDEMPOTENCY,
+} from '@audio-book/ingestion';
 import type { Logger } from '@audio-book/logging';
-import { QueueManager } from '@audio-book/queue';
+import { enqueueProcessingJob, QueueManager } from '@audio-book/queue';
 import { buildStorageKey, checksumBuffer, type StorageProvider } from '@audio-book/storage';
 import { LOGGER, PRISMA, QUEUE_MANAGER, STORAGE_PROVIDER } from '../common/tokens.js';
 import { assertTenantOwnership } from '../common/tenant.js';
@@ -20,8 +24,32 @@ import { UploadSessionStore, type UploadSessionRecord } from './upload-session.s
 const PRODUCER = 'api';
 const PRODUCER_VERSION = '1.0.0';
 const PIPELINE_VERSION = defaultIngestionConfig().pipelineVersion;
-const PARSER_VERSION_FOR_IDEMPOTENCY = 'pdfjs-dist@4.9.155+epub-spine-reader@1.0.0';
 const UPLOAD_URL_TTL_SECONDS = 900;
+
+/**
+ * The single definition of the `parse_book` queue envelope.
+ *
+ * It is written onto the ProcessingJob row (`dispatch_envelope`) inside the
+ * same transaction that creates the row, and used verbatim by the dispatch
+ * that follows the commit. One definition, two uses: the job's recorded
+ * intent and its actual dispatch cannot drift, and ProcessingJobSweeper can
+ * recover the job from the row alone if the process dies in between
+ * (QA finding F-4).
+ */
+function parseBookEnvelope(args: {
+  jobId: string;
+  bookFileId: string;
+  tenantId: string;
+  correlationId: string;
+}) {
+  return {
+    job_id: args.jobId,
+    entity_id: args.jobId,
+    correlation_id: args.correlationId,
+    tenant_id: args.tenantId,
+    payload: { book_file_id: args.bookFileId, parser_version: PARSER_VERSION_FOR_IDEMPOTENCY },
+  };
+}
 
 export interface CreateBookBody {
   title: string;
@@ -327,6 +355,12 @@ export class BooksService {
           idempotencyKey: `parse:${bookFileId}:${PARSER_VERSION_FOR_IDEMPOTENCY}`,
           idempotencyFingerprint: checksum.hash,
           correlationId,
+          dispatchEnvelope: parseBookEnvelope({
+            jobId,
+            bookFileId,
+            tenantId: principal.tenantId,
+            correlationId,
+          }),
         },
       });
 
@@ -411,17 +445,13 @@ export class BooksService {
     tenantId: string;
     correlationId: string;
   }): Promise<void> {
-    await this.queueManager.enqueue(
-      'parse',
-      {
-        job_id: args.jobId,
-        entity_id: args.jobId,
-        correlation_id: args.correlationId,
-        tenant_id: args.tenantId,
-        payload: { book_file_id: args.bookFileId, parser_version: PARSER_VERSION_FOR_IDEMPOTENCY },
-      },
-      { jobName: 'parse_book', maxAttempts: 3 },
-    );
+    await enqueueProcessingJob(this.prisma, this.queueManager, {
+      processingJobId: args.jobId,
+      queue: 'parse',
+      envelope: parseBookEnvelope(args),
+      jobName: 'parse_book',
+      maxAttempts: 3,
+    });
     this.logger.info({ job_id: args.jobId, book_id: args.bookId }, 'Enqueued parse_book command');
   }
 
@@ -480,6 +510,12 @@ export class BooksService {
           idempotencyFingerprint: bookFile.contentHash,
           correlationId,
           forced: Boolean(body.force),
+          dispatchEnvelope: parseBookEnvelope({
+            jobId,
+            bookFileId: bookFile.id,
+            tenantId: principal.tenantId,
+            correlationId,
+          }),
         },
       });
 

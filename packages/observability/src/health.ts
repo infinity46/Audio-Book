@@ -67,9 +67,50 @@ export class InvalidWorkerStateTransitionError extends Error {}
 
 export class WorkerHealthStateMachine {
   private state: WorkerState = 'STARTING';
+  private inFlight = 0;
 
   getState(): WorkerState {
     return this.state;
+  }
+
+  /** Jobs currently in flight, for tests and diagnostics. */
+  getInFlight(): number {
+    return this.inFlight;
+  }
+
+  /**
+   * Marks one job as started. PROCESSING/IDLE describe the *process*, but a
+   * worker runs `concurrency` jobs at once and each one used to drive
+   * `transition()` directly — so the second overlapping job threw
+   * "Cannot transition from PROCESSING to PROCESSING" out of the BullMQ
+   * process function, before any handler logic ran. The job failed, retried
+   * into the same collision, and dead-lettered, while its ProcessingJob row
+   * stayed at CREATED/attempt_count=0 because nothing had touched it yet
+   * (QA finding F-24). worker-cpu shares one state machine across four queue
+   * workers, so this needed only two jobs to overlap anywhere in the process.
+   *
+   * The count also fixes the mirror-image bug: the first job to finish used
+   * to flip the whole process to IDLE while its siblings were still running,
+   * and the last one's `finally` then hit an IDLE -> IDLE throw that masked
+   * whatever real error was propagating.
+   */
+  beginWork(): void {
+    this.inFlight += 1;
+    if (this.inFlight === 1 && (this.state === 'IDLE' || this.state === 'MODEL_READY')) {
+      this.transition('PROCESSING');
+    }
+  }
+
+  /**
+   * Marks one job as finished; only the last one in flight returns the
+   * process to IDLE. Safe to call from a `finally` — during DRAINING/STOPPED
+   * shutdown has already claimed the state and must not be dragged back.
+   */
+  endWork(): void {
+    if (this.inFlight > 0) this.inFlight -= 1;
+    if (this.inFlight === 0 && this.state === 'PROCESSING') {
+      this.transition('IDLE');
+    }
   }
 
   transition(to: WorkerState): void {

@@ -1,34 +1,29 @@
 """worker-gpu -- the TTS worker. Consumes the `gpu` queue.
 
-PHASE 1 SCAFFOLDING. This module wires configuration, logging, health and queue
-consumption together and proves the lifecycle reaches MODEL_READY. It performs **no speech
-synthesis of any kind**: there is no model, no CUDA, no vocoder, and no audio output
-anywhere in this service yet.
-
-There is deliberately no `generate_fake_audio()` here. A stub that returned plausible
-silent WAV bytes would flow through validation and assembly and produce a "successful"
-audiobook of nothing, and the failure would surface far from its cause. The stub provider
-below loads nothing and the handler synthesizes nothing; both say so loudly.
-
-Job types this worker will eventually own (`event-contracts.md` §5.2, `gpu` queue):
-`generate_tts_chunk`, `generate_voice_preview`, and `verify_transcript` where the
-deployment routes ASR to GPU.
+Phase 5 replaces the Phase 1 `StubTTSProvider`/`handle_job` scaffolding with the real TTS
+Provider Runtime: a configurable `TTSProvider` (`mock` by default, `kokoro` where
+configured), the capability negotiation and audio-validation pipeline of `worker_gpu.tts`,
+and the two job handlers this worker actually owns -- `generate_tts_chunk` and
+`generate_voice_preview` (`event-contracts.md` §5.2, `gpu` queue).
 
 ## Deployment isolation
 
-worker-gpu is ALWAYS its own deployment unit. It is never co-located in a process or
-container with worker-ai, worker-cpu, or the Node services. Two reasons, both load-bearing:
-GPU nodes are the expensive, separately-scaled resource and must not be occupied by CPU
-work; and this worker runs third-party model code over every tenant's content, so its blast
-radius is deliberately kept small (see the narrow-role note in `workers_common.db`).
+worker-gpu is ALWAYS its own deployment unit, mirroring `worker-ai/main.py`'s note: never
+co-located with worker-ai, worker-cpu, or the Node services, both because GPU nodes are the
+expensive, separately-scaled resource, and because this worker runs third-party model code
+over every tenant's content, so its blast radius is deliberately kept small (the narrow
+`app_worker_gpu` DB role in `workers_common.db`'s docstring is the other half of that).
 """
 
 from __future__ import annotations
 
-import asyncio
+from collections.abc import Awaitable, Callable
 
 from fastapi import FastAPI
 
+from worker_gpu.handlers.generate_tts_chunk import handle_generate_tts_chunk
+from worker_gpu.handlers.generate_voice_preview import handle_generate_voice_preview
+from worker_gpu.tts import TTSProvider, TtsConfig, VoiceCache, build_tts_provider, load_tts_config
 from workers_common import (
     WorkerSettings,
     get_logger,
@@ -40,80 +35,73 @@ from workers_common.runtime import create_worker_app
 log = get_logger(__name__)
 
 
-class StubTTSProvider:
-    """A STUB. It loads no model, allocates no GPU memory, and synthesizes nothing.
+class TTSModelProviderAdapter:
+    """Adapts a `TTSProvider` to `workers_common.runtime.ModelProvider`.
 
-    This exists for exactly one reason: to prove that the HEALTHY -> MODEL_READY transition
-    and the readiness endpoint work end to end. It is NOT a TTS implementation, it does not
-    produce audio, and it must never be swapped in for one or benchmarked as one.
-
-    Replacing this with a real provider means implementing the `ModelProvider` protocol
-    against an actual GPU-backed engine, at which point `load()` becomes real weight
-    loading plus a verification pass, and the job handler gains real synthesis. Everything
-    around it -- lifecycle, health, drain, correlation -- stays exactly as it is. That is
-    the point of the seam.
-
-    Two things the real implementation must add that this stub deliberately does not fake:
-
-      * `load()` must VERIFY the model after loading (a test synthesis), not merely
-        allocate it. MODEL_READY asserts the model works, not that a file was read.
-      * The provider must advertise its concurrency from measured VRAM headroom, since
-        the queue does not guess it (`context.md` §10.4 step 4).
+    `load()` is where §51's model warming and §18.1's `COLD -> LOADING -> READY`
+    transition actually happen -- `TTSProvider.load_model()` itself is required to VERIFY
+    (a real synthesis, not just an allocation) before returning, which is what makes this
+    worker's `MODEL_READY` state honest (`workers_common.runtime.ModelProvider`'s own
+    contract). The identity passed to `load_model`/`unload_model` is a diagnostic label,
+    not the database's `model_version.id` -- the authoritative DB-registered UUID is
+    resolved fresh, per job, via `worker_gpu.repo.model_registry` inside each handler
+    (§13.3: a worker's *advertised* identity is what is checked against the job's pinned
+    UUID, not whatever label it logged at boot).
     """
 
-    def __init__(self, settings: WorkerSettings) -> None:
-        self._settings = settings
-        self._loaded = False
+    def __init__(self, provider: TTSProvider) -> None:
+        self._provider = provider
 
     @property
     def model_id(self) -> str:
-        return self._settings.model.model_id
+        identity = self._provider.model_identity
+        return f"{identity.provider_id}/{identity.model_id}@{identity.version}"
 
     async def load(self) -> None:
-        log.warning(
-            "model.stub_load",
-            model_id=self.model_id,
-            note="STUB provider: no TTS model is being loaded and no GPU is being "
-            "allocated. Phase 1 scaffolding only.",
-        )
-        await asyncio.sleep(0.1)  # placeholder for real weight-load + verification latency
-        self._loaded = True
+        await self._provider.load_model(self._provider.model_identity.version)
+        log.info("tts_provider.ready", model_id=self.model_id)
 
     async def unload(self) -> None:
-        # A real implementation frees VRAM here. Doing it on the drain path rather than at
-        # process exit matters: a worker that holds its allocation until SIGKILL can leave
-        # the GPU unusable for the replacement pod scheduled onto the same device.
-        self._loaded = False
-        log.info("model.stub_unloaded", model_id=self.model_id)
+        await self._provider.unload_model(self._provider.model_identity.version)
 
     @property
     def is_loaded(self) -> bool:
-        return self._loaded
+        return True
 
 
-async def handle_job(ctx: JobContext) -> None:
-    """STUB handler. Accepts a job, logs it, synthesizes nothing.
+def _build_handler(
+    provider: TTSProvider, voice_cache: VoiceCache
+) -> Callable[[JobContext], Awaitable[None]]:
+    async def handle_job(ctx: JobContext) -> None:
+        if ctx.message_type == "generate_tts_chunk":
+            await handle_generate_tts_chunk(ctx, provider=provider, voice_cache=voice_cache)
+        elif ctx.message_type == "generate_voice_preview":
+            await handle_generate_voice_preview(ctx, provider=provider, voice_cache=voice_cache)
+        else:
+            log.warning("job.unknown_message_type", message_type=ctx.message_type)
 
-    It returns normally, which acks the job. That is correct for Phase 1/3 -- worker-gpu's
-    real job types (`generate_tts_chunk`, `generate_voice_preview`) are TTS work, out of
-    scope through Phase 3 -- but it is the single most important line to change when real
-    synthesis lands: acking without producing audio would silently mark chunks complete.
-    """
-    log.info(
-        "job.received_by_stub",
-        message_type=ctx.message_type,
-        note="STUB handler: no synthesis is performed and no audio is produced. "
-        "Phase 1 scaffolding only.",
-    )
+    return handle_job
 
 
 def create_app() -> FastAPI:
     settings = load_settings_or_exit()
+    tts_config: TtsConfig = load_tts_config()
+    provider = build_tts_provider(tts_config)
+    voice_cache = VoiceCache(max_size=tts_config.voice_cache_size, on_evict=_evict_voice)
+
     return create_worker_app(
         settings=settings,
-        model_provider=StubTTSProvider(settings),
-        handler=handle_job,
+        model_provider=TTSModelProviderAdapter(provider),
+        handler=_build_handler(provider, voice_cache),
     )
+
+
+async def _evict_voice(handle: object) -> None:
+    # §94 -- eviction releases whatever the adapter held for this voice (an embedding
+    # tensor, a decoded reference clip). Every current adapter's handle payload is a plain
+    # dict with no external resource to release, so this is a no-op today; it exists as the
+    # seam a future provider with real GPU-resident voice state plugs into.
+    return None
 
 
 app = create_app()

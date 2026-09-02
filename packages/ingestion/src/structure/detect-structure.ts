@@ -225,6 +225,35 @@ function splitChapterIntoSections(
     const text = normalizeText(rawText, config);
     if (text.length === 0) continue;
 
+    // A word split by a page break arrives as two blocks — "…an extra-" then
+    // "ordinary afternoon…" — because dehyphenation runs inside a single
+    // block's text and never sees across the boundary. Left alone, the
+    // canonical text keeps a dangling hyphen at the end of one paragraph and
+    // resumes mid-word in the next, so TTS narrates a broken word and the
+    // paragraph text no longer matches the source sentence (F-1).
+    //
+    // Merge only on the same conservative evidence `dehyphenate` itself uses:
+    // the previous paragraph ends with a hyphen directly after a lowercase
+    // letter, and this block begins with a lowercase letter. That leaves
+    // legitimate suspended hyphens ("twenty- and thirty-year-olds", which is
+    // followed by a space and a lowercase word *within* one block) untouched,
+    // since those never end a block.
+    const previous = paragraphs.at(-1);
+    if (
+      config.dehyphenate &&
+      previous !== undefined &&
+      previous.sectionOrderIndex === currentSectionIndex &&
+      /\p{Ll}-$/u.test(previous.text) &&
+      /^\p{Ll}/u.test(text)
+    ) {
+      previous.text = `${previous.text.slice(0, -1)}${text}`;
+      previous.rawText = `${previous.rawText}\n${rawText}`;
+      // The paragraph now spans to this block's page; keep the end marker
+      // honest so downstream locators still bracket the real source range.
+      if (block.locator.kind === 'pdf') previous.sourcePageEndNumber = block.locator.page;
+      continue;
+    }
+
     paragraphs.push({
       text,
       rawText,

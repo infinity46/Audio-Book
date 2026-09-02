@@ -1,0 +1,11 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["accepted"],
+  "properties": {
+    "accepted": { "type": "boolean" },
+    "applies_to": { "type": "string", "enum": ["MINOR_SPEAKERS_ONLY", "ALL_UNASSIGNED"] },
+    "max_line_count": { "type": "integer", "minimum": 1 }
+  }
+}

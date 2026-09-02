@@ -1,0 +1,19 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["chunk_ids", "revision_reason"],
+  "properties": {
+    "chunk_ids": {
+      "type": "array",
+      "items": { "type": "string", "format": "uuid" },
+      "minItems": 1,
+      "maxItems": 500
+    },
+    "revision_reason": {
+      "type": "string",
+      "enum": ["CHARACTER_MERGED", "VOICE_REASSIGNED", "LEXICON_CHANGED", "USER_EDIT"]
+    },
+    "director_version": { "type": "string", "minLength": 1, "maxLength": 64 }
+  }
+}

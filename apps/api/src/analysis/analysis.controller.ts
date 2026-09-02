@@ -26,6 +26,8 @@ import { MalformedRequestError } from '@audio-book/errors';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { AjvValidationPipe } from '../common/pipes/ajv-validation.pipe.js';
 import { JwtAuthGuard, type AuthenticatedPrincipal } from '../common/guards/jwt-auth.guard.js';
+import { RateLimitGuard } from '../common/guards/rate-limit.guard.js';
+import { TenantRoleGuard } from '../common/guards/tenant-role.guard.js';
 import { IdempotencyService } from '../common/idempotency.service.js';
 import {
   AnalysisService,
@@ -58,7 +60,7 @@ function requireIdempotencyKey(key: string | undefined): string {
  * (api-specification.md §16.9-16.12). Mirrors books.controller.ts's shape.
  */
 @Controller('api/v1/books/:bookId')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, TenantRoleGuard, RateLimitGuard)
 export class AnalysisController {
   constructor(
     private readonly analysis: AnalysisService,

@@ -4,7 +4,11 @@
   "private": true,
   "type": "module",
   "exports": {
-    "./processors/maintenance": "./dist/processors/maintenance.js"
+    "./processors/maintenance": "./dist/processors/maintenance.js",
+    "./processors/assembly": "./dist/processors/assembly.js",
+    "./processors/ingestion": "./dist/processors/ingestion.js",
+    "./processing-job-sweeper": "./dist/processing-job-sweeper.js",
+    "./lib/ffmpeg": "./dist/lib/ffmpeg.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

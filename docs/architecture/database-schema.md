@@ -2696,7 +2696,7 @@ Every enum type, its members, and its source. **The API adds none and renames no
 | `idempotency_status` | `IN_PROGRESS, COMPLETED, FAILED` | `api-specification.md` §11.3 |
 | `outbox_status` | `PENDING, PUBLISHED, FAILED` | `event-contracts.md` §19 (§15.6, new in this revision — closes E-19) |
 | `inbox_outcome` | `PROCESSED, SKIPPED, FAILED` | `event-contracts.md` §20 (§15.7, new in this revision — closes E-19) |
-| `resource_type` | `book, book_file, book_version, chapter, scene, paragraph, character, story_bible_version, voice_profile, voice_profile_version, audio_script, audio_script_chunk, audio_chunk, chapter_audio, audiobook, job, tenant, user` | `api-specification.md` §16.18 `related_resource.type` |
+| `resource_type` | `book, book_file, book_version, chapter, scene, paragraph, character, story_bible_version, voice_profile, voice_profile_version, voice_preview, audio_script, audio_script_chunk, tts_job, audio_chunk, chapter_audio, audiobook, job, tenant, user` | `api-specification.md` §16.18 `related_resource.type`. `voice_preview` and `tts_job` added in migration `0002` — a `ProcessingJob` whose result is one of those rows previously had no way to name it, and `generate_voice_preview` failed on every run (QA finding F-19) |
 | `model_role` | `PARSER, OCR, NORMALIZER, LLM, TTS, ASR, AUDIO_TOOL, EMBEDDING` | `api-specification.md` §16.21 (+ `NORMALIZER`, `EMBEDDING`) |
 | `worker_kind` | `CPU, AI, GPU` | `context.md` §3.1 |
 | `worker_status` | `STARTING, READY, DRAINING, QUARANTINED, STOPPED` | `context.md` §10.4 |

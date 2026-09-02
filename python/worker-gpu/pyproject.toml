@@ -1,15 +1,22 @@
 [project]
 name = "worker-gpu"
 version = "0.1.0"
-description = "TTS worker. Consumes the `gpu` queue. GPU-isolated. Phase 1 scaffolding."
+description = "TTS worker. Consumes the `gpu` queue. GPU-isolated."
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "workers-common",
     "uvicorn[standard]>=0.32",
+    "pydantic-settings>=2.6",
 ]
-# NOTE: no torch, no CUDA bindings, no TTS engine. Phase 1 loads no model. Those
-# dependencies arrive with the real provider, and they are what will force this service
-# onto a CUDA base image (see Dockerfile).
+# `mock` (the default `TTS_PROVIDER`) has no model/GPU dependency at all -- it is the
+# CI/local-dev provider `deployment-architecture.md` §6 makes mandatory. The `kokoro`
+# extra below is what pulls in a real (CPU-runnable) engine; nothing in the base
+# dependency set assumes CUDA or any specific inference runtime.
+
+[project.optional-dependencies]
+kokoro = [
+    "kokoro-onnx>=0.3",
+]
 
 [project.scripts]
 worker-gpu = "worker_gpu.main:main"

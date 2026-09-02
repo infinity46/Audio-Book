@@ -22,6 +22,8 @@ import { MalformedRequestError } from '@audio-book/errors';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { AjvValidationPipe } from '../common/pipes/ajv-validation.pipe.js';
 import { JwtAuthGuard, type AuthenticatedPrincipal } from '../common/guards/jwt-auth.guard.js';
+import { RateLimitGuard } from '../common/guards/rate-limit.guard.js';
+import { TenantRoleGuard } from '../common/guards/tenant-role.guard.js';
 import { IdempotencyService } from '../common/idempotency.service.js';
 import {
   BooksService,
@@ -52,7 +54,7 @@ function requireIdempotencyKey(key: string | undefined): string {
  * out of scope for this pass (see the plan's "Known limitations").
  */
 @Controller('api/v1/books')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, TenantRoleGuard, RateLimitGuard)
 export class BooksController {
   constructor(
     private readonly books: BooksService,
@@ -252,6 +254,7 @@ export class BooksController {
   }
 
   @Post(':bookId/text/access-urls')
+  @HttpCode(200)
   async createTextAccessUrl(
     @Req() request: RequestWithPrincipal,
     @Param('bookId') bookId: string,

@@ -58,6 +58,12 @@ async function main(): Promise<void> {
           FROM information_schema.tables t
           WHERE t.table_schema = 'public'
             AND t.table_type = 'BASE TABLE'
+            -- Prisma's own migration ledger is not a model and must not be
+            -- counted against schema.prisma. Omitting it made this check
+            -- expect 59 while the database legitimately holds 60, so the
+            -- drift gate was red on a clean tree from the day it was written
+            -- (F-20) — and a gate that always fails cannot detect real drift.
+            AND t.table_name <> '_prisma_migrations'
             AND NOT EXISTS (
               SELECT 1 FROM pg_inherits i
               JOIN pg_class c ON c.oid = i.inhrelid

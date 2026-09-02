@@ -1,0 +1,25 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["scope"],
+  "properties": {
+    "scope": { "type": "string", "enum": ["CHAPTER", "AUDIOBOOK"] },
+    "chapter_ids": {
+      "type": "array",
+      "items": { "type": "string", "format": "uuid" },
+      "minItems": 1,
+      "maxItems": 500
+    },
+    "delivery_formats": {
+      "type": "array",
+      "items": { "type": "string", "enum": ["M4B", "M4A", "MP3_PER_CHAPTER"] },
+      "minItems": 1,
+      "maxItems": 3,
+      "uniqueItems": true
+    },
+    "allow_partial_preview": { "type": "boolean" },
+    "force": { "type": "boolean" },
+    "priority": { "type": "string", "enum": ["INTERACTIVE", "NORMAL", "BULK"] }
+  }
+}

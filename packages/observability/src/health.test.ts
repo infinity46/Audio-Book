@@ -55,4 +55,56 @@ describe('WorkerHealthStateMachine', () => {
     machine.transition('STOPPED');
     expect(machine.isAlive()).toBe(false);
   });
+
+  describe('concurrent jobs (F-24)', () => {
+    function readyMachine(): WorkerHealthStateMachine {
+      const machine = new WorkerHealthStateMachine();
+      machine.transition('HEALTHY');
+      machine.transition('MODEL_READY');
+      machine.transition('IDLE');
+      return machine;
+    }
+
+    it('survives overlapping jobs instead of throwing on the second one', () => {
+      const machine = readyMachine();
+      machine.beginWork();
+      // The regression: this second concurrent job threw "Cannot transition
+      // from PROCESSING to PROCESSING" straight out of the BullMQ process
+      // function, dead-lettering a job whose handler never ran.
+      expect(() => machine.beginWork()).not.toThrow();
+      expect(machine.getState()).toBe('PROCESSING');
+      expect(machine.getInFlight()).toBe(2);
+    });
+
+    it('stays PROCESSING until the LAST in-flight job finishes', () => {
+      const machine = readyMachine();
+      machine.beginWork();
+      machine.beginWork();
+
+      machine.endWork();
+      // One job is still running: reporting IDLE here would be a readiness lie.
+      expect(machine.getState()).toBe('PROCESSING');
+
+      machine.endWork();
+      expect(machine.getState()).toBe('IDLE');
+      expect(machine.getInFlight()).toBe(0);
+    });
+
+    it('is safe to call from a finally block during shutdown', () => {
+      const machine = readyMachine();
+      machine.beginWork();
+      machine.transition('DRAINING');
+      // A job unwinding after drain started must not drag the process back to
+      // IDLE, and must not throw over an already-failing path.
+      expect(() => machine.endWork()).not.toThrow();
+      expect(machine.getState()).toBe('DRAINING');
+    });
+
+    it('never drives the count below zero', () => {
+      const machine = readyMachine();
+      expect(() => machine.endWork()).not.toThrow();
+      expect(machine.getInFlight()).toBe(0);
+      expect(machine.getState()).toBe('IDLE');
+    });
+  });
 });

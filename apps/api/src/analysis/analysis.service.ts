@@ -4,7 +4,7 @@ import { withTransaction } from '@audio-book/database';
 import { ConflictError, NotFoundError, ValidationError } from '@audio-book/errors';
 import { generateId, writeOutboxMessage } from '@audio-book/events';
 import type { Logger } from '@audio-book/logging';
-import { QueueManager } from '@audio-book/queue';
+import { enqueueProcessingJob, QueueManager } from '@audio-book/queue';
 import { LOGGER, PRISMA, QUEUE_MANAGER } from '../common/tokens.js';
 import { assertTenantOwnership } from '../common/tenant.js';
 import { decodeCursor, paginate, parseLimit } from '../common/pagination.js';
@@ -176,6 +176,27 @@ export class AnalysisService {
     const correlationId = generateId();
     const now = new Date();
     const priority = body.priority ?? 'NORMAL';
+    // Built once: persisted on the ProcessingJob row inside the transaction so
+    // ProcessingJobSweeper can re-dispatch it if this process dies before the
+    // enqueue below, and reused verbatim by that enqueue (F-4).
+    const envelope = {
+      job_id: jobId,
+      entity_id: jobId,
+      correlation_id: correlationId,
+      tenant_id: principal.tenantId,
+      payload: {
+        book_id: bookId,
+        book_version_id: bookVersion.id,
+        chapter_id: firstChapter.id,
+        spine_start: firstChapter.spineStart,
+        spine_end: firstChapter.spineEnd,
+        story_bible_version_id: null,
+        analysis_mode: body.mode,
+        remaining_chapter_ids: chapters.slice(1).map((c) => c.id),
+        root_job_id: jobId,
+        chapters_total: chapters.length,
+      },
+    };
 
     await withTransaction(this.prisma, async (tx) => {
       await tx.processingJob.create({
@@ -201,6 +222,7 @@ export class AnalysisService {
           correlationId,
           forced: Boolean(body.force),
           createdByUserId: principal.sub,
+          dispatchEnvelope: envelope,
         },
       });
 
@@ -210,28 +232,13 @@ export class AnalysisService {
       });
     });
 
-    await this.queueManager.enqueue(
-      'ai',
-      {
-        job_id: jobId,
-        entity_id: jobId,
-        correlation_id: correlationId,
-        tenant_id: principal.tenantId,
-        payload: {
-          book_id: bookId,
-          book_version_id: bookVersion.id,
-          chapter_id: firstChapter.id,
-          spine_start: firstChapter.spineStart,
-          spine_end: firstChapter.spineEnd,
-          story_bible_version_id: null,
-          analysis_mode: body.mode,
-          remaining_chapter_ids: chapters.slice(1).map((c) => c.id),
-          root_job_id: jobId,
-          chapters_total: chapters.length,
-        },
-      },
-      { jobName: 'analyze_scene', maxAttempts: 3 },
-    );
+    await enqueueProcessingJob(this.prisma, this.queueManager, {
+      processingJobId: jobId,
+      queue: 'ai',
+      envelope,
+      jobName: 'analyze_scene',
+      maxAttempts: 3,
+    });
 
     this.logger.info(
       { job_id: jobId, book_id: bookId, chapter_count: chapters.length },

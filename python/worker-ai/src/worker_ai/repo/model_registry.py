@@ -9,14 +9,40 @@ equivalent) before analyzing anything.
 
 from __future__ import annotations
 
+from typing import Protocol, runtime_checkable
+
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from worker_ai.semantic.schemas import ModelIdentity
 from workers_common.queue import TerminalJobError
 
 
-async def resolve_model_version_id(session: AsyncSession, identity: ModelIdentity) -> str:
+@runtime_checkable
+class _ModelIdentityLike(Protocol):
+    """Structural type covering both `semantic.schemas.ModelIdentity` and
+    `director.schemas.ModelIdentity` -- two independently-versioned Pydantic
+    models with the same (role, provider_id, model_id, version) shape.
+    Resolution is a generic (role, provider_id, model_id, version) lookup, so
+    this module deliberately does not import either concrete model and
+    thereby couple the two provider families to each other.
+
+    Declared as read-only properties, not plain attributes: Protocol
+    structural matching compares attributes invariantly but properties
+    covariantly, so a concrete model whose `role` is the narrower
+    `Literal["LLM"]` (both current models) still satisfies `role: str` here.
+    """
+
+    @property
+    def role(self) -> str: ...
+    @property
+    def provider_id(self) -> str: ...
+    @property
+    def model_id(self) -> str: ...
+    @property
+    def version(self) -> str: ...
+
+
+async def resolve_model_version_id(session: AsyncSession, identity: _ModelIdentityLike) -> str:
     row = (
         await session.execute(
             text(

@@ -1,0 +1,168 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": false,
+  "minProperties": 1,
+  "properties": {
+    "performance": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "speaker_type": {
+          "type": "string",
+          "enum": ["NARRATOR", "CHARACTER", "UNKNOWN", "SYSTEM"]
+        },
+        "character_id": { "type": ["string", "null"], "format": "uuid" },
+        "is_dialogue": { "type": "boolean" },
+        "delivery_mode": {
+          "type": "string",
+          "enum": [
+            "NORMAL",
+            "INTERNAL_THOUGHT",
+            "WHISPER",
+            "SHOUT",
+            "LAUGHING",
+            "CRYING",
+            "SINGING",
+            "READING_ALOUD"
+          ]
+        },
+        "emotion": {
+          "type": "string",
+          "enum": [
+            "NEUTRAL",
+            "HAPPY",
+            "SAD",
+            "GRIEF",
+            "ANGRY",
+            "FEARFUL",
+            "SURPRISED",
+            "DISGUSTED",
+            "EXCITED",
+            "CALM",
+            "TENSE",
+            "ANXIOUS",
+            "SOMBER",
+            "CONFIDENT",
+            "UNCERTAIN",
+            "PLAYFUL",
+            "SERIOUS"
+          ]
+        },
+        "emotion_intensity": { "type": "number", "minimum": 0.0, "maximum": 1.0 },
+        "pacing": { "type": "number", "minimum": 0.5, "maximum": 2.0 },
+        "pitch": { "type": "number", "minimum": -1.0, "maximum": 1.0 },
+        "volume": { "type": "number", "minimum": -1.0, "maximum": 1.0 },
+        "pauses": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["position", "duration_ms"],
+            "properties": {
+              "position": { "type": "string", "enum": ["LEADING", "TRAILING", "OFFSET"] },
+              "offset_chars": { "type": ["integer", "null"], "minimum": 0 },
+              "duration_ms": { "type": "integer", "minimum": 0 },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "BEAT",
+                  "SENTENCE",
+                  "PARAGRAPH",
+                  "DRAMATIC",
+                  "SCENE_TRANSITION",
+                  "SPEAKER_TRANSITION"
+                ]
+              },
+              "breath": { "type": "string", "enum": ["NONE", "NATURAL", "AUDIBLE", "HEAVY"] }
+            }
+          }
+        },
+        "emphasis": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["offset_chars", "length_chars", "strength"],
+            "properties": {
+              "offset_chars": { "type": "integer", "minimum": 0 },
+              "length_chars": { "type": "integer", "minimum": 1 },
+              "strength": { "type": "number", "minimum": 0.0, "maximum": 1.0 }
+            }
+          }
+        },
+        "non_verbal": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["offset_chars", "length_chars", "expression", "intensity", "placement"],
+            "properties": {
+              "offset_chars": { "type": "integer", "minimum": 0 },
+              "length_chars": { "type": "integer", "minimum": 0 },
+              "expression": {
+                "type": "string",
+                "enum": [
+                  "LAUGH",
+                  "SIGH",
+                  "GASP",
+                  "SOB",
+                  "GROAN",
+                  "BREATH",
+                  "THROAT_CLEAR",
+                  "HESITATION"
+                ]
+              },
+              "intensity": { "type": "number", "minimum": 0.0, "maximum": 1.0 },
+              "placement": { "type": "string", "enum": ["BEFORE", "AFTER", "OVERLAY"] }
+            }
+          }
+        }
+      }
+    },
+    "voice_binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "voice_profile_id": { "type": "string", "format": "uuid" },
+        "voice_profile_version_id": { "type": "string", "format": "uuid" }
+      }
+    },
+    "generation_control": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "tts_provider_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "seed": { "type": ["integer", "null"] },
+        "target_sample_rate": { "type": ["integer", "null"], "minimum": 1 },
+        "target_channels": { "type": ["integer", "null"], "minimum": 1, "maximum": 8 }
+      }
+    },
+    "quality": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "review_flags": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "DIRECTOR_FALLBACK",
+              "UNKNOWN_SPEAKER",
+              "LOW_CONFIDENCE",
+              "CHARACTER_METADATA_CHANGED",
+              "PRONUNCIATION_LEXICON_CHANGED",
+              "CAPABILITY_GAP",
+              "TEXT_HASH_MISMATCH"
+            ]
+          }
+        }
+      }
+    },
+    "reason": { "type": "string", "minLength": 1, "maxLength": 2000 }
+  }
+}

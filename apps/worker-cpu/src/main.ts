@@ -13,8 +13,23 @@ import {
 } from '@audio-book/ingestion';
 import { Redis } from 'ioredis';
 import { startHealthServer } from './health-server.js';
+import { ProcessingJobSweeper } from './processing-job-sweeper.js';
 import { processMaintenanceJob, type MaintenanceEventPayload } from './processors/maintenance.js';
 import { processIngestionJob, type ParseBookCommandPayload } from './processors/ingestion.js';
+import {
+  processAssembleAudiobookJob,
+  processAssembleChapterJob,
+  processEncodeDeliveryFormatJob,
+  type AssembleAudiobookCommandPayload,
+  type AssembleChapterCommandPayload,
+  type EncodeDeliveryFormatCommandPayload,
+} from './processors/assembly.js';
+
+/** The `audio` queue carries three distinct command types, discriminated by BullMQ's own `job.name` (set at enqueue time — see books.service.ts's `jobName: 'parse_book'` for the equivalent on the `parse` queue). */
+type AudioQueueCommandPayload =
+  | AssembleChapterCommandPayload
+  | AssembleAudiobookCommandPayload
+  | EncodeDeliveryFormatCommandPayload;
 
 // Setup below is synchronous, but main() stays async so `main().catch(...)`
 // below catches synchronous throws the same way it catches rejected
@@ -38,6 +53,15 @@ async function main(): Promise<void> {
   const redis = new Redis(config.secrets.redisUrl, { maxRetriesPerRequest: 3 });
   const storage = new S3StorageProvider(config.secrets.storage);
   const queueManager = new QueueManager({ redisUrl: config.secrets.redisUrl });
+  const processingJobSweeper = new ProcessingJobSweeper({
+    prisma,
+    queueManager,
+    logger,
+    pollIntervalMs: 15_000,
+    batchSize: 50,
+    staleAfterMs: 30_000,
+    onError: (err) => logError(logger, err, 'ProcessingJobSweeper poll failed'),
+  });
   const ingestionConfig: IngestionConfig = {
     ...defaultIngestionConfig(),
     ...config.ingestion,
@@ -75,7 +99,7 @@ async function main(): Promise<void> {
   const worker = queueManager.createWorker<MaintenanceEventPayload>(
     'maintenance',
     async (job) => {
-      stateMachine.transition('PROCESSING');
+      stateMachine.beginWork();
       const envelope: QueueJobEnvelope<MaintenanceEventPayload> = job.data;
       try {
         await runWithCorrelation(
@@ -87,7 +111,7 @@ async function main(): Promise<void> {
           () => processMaintenanceJob({ prisma, logger, envelope }),
         );
       } finally {
-        stateMachine.transition('IDLE');
+        stateMachine.endWork();
       }
     },
     { concurrency: config.worker.concurrency, maxAttempts: 3 },
@@ -99,7 +123,7 @@ async function main(): Promise<void> {
   const ingestionWorker = queueManager.createWorker<ParseBookCommandPayload>(
     'parse',
     async (job) => {
-      stateMachine.transition('PROCESSING');
+      stateMachine.beginWork();
       const envelope: QueueJobEnvelope<ParseBookCommandPayload> = job.data;
       try {
         await runWithCorrelation(
@@ -121,7 +145,7 @@ async function main(): Promise<void> {
             }),
         );
       } finally {
-        stateMachine.transition('IDLE');
+        stateMachine.endWork();
       }
     },
     { concurrency: config.worker.concurrency, maxAttempts: INGESTION_MAX_ATTEMPTS },
@@ -129,15 +153,78 @@ async function main(): Promise<void> {
 
   ingestionWorker.on('error', (err) => logError(logger, err, 'Ingestion worker error'));
 
+  const ASSEMBLY_MAX_ATTEMPTS = 3;
+  const assemblyWorker = queueManager.createWorker<AudioQueueCommandPayload>(
+    'audio',
+    async (job) => {
+      stateMachine.beginWork();
+      try {
+        await runWithCorrelation(
+          {
+            correlationId: job.data.correlation_id,
+            jobId: job.data.job_id,
+            workerId: config.app.serviceName,
+          },
+          async () => {
+            switch (job.name) {
+              case 'assemble_chapter':
+                await processAssembleChapterJob({
+                  prisma,
+                  storage,
+                  logger,
+                  envelope: job.data as QueueJobEnvelope<AssembleChapterCommandPayload>,
+                  queueManager,
+                  attemptsMade: job.attemptsMade,
+                  maxAttempts: ASSEMBLY_MAX_ATTEMPTS,
+                });
+                return;
+              case 'assemble_audiobook':
+                await processAssembleAudiobookJob({
+                  prisma,
+                  storage,
+                  logger,
+                  envelope: job.data as QueueJobEnvelope<AssembleAudiobookCommandPayload>,
+                  queueManager,
+                  attemptsMade: job.attemptsMade,
+                  maxAttempts: ASSEMBLY_MAX_ATTEMPTS,
+                });
+                return;
+              case 'encode_delivery_format':
+                await processEncodeDeliveryFormatJob({
+                  prisma,
+                  storage,
+                  logger,
+                  envelope: job.data as QueueJobEnvelope<EncodeDeliveryFormatCommandPayload>,
+                  attemptsMade: job.attemptsMade,
+                  maxAttempts: ASSEMBLY_MAX_ATTEMPTS,
+                });
+                return;
+              default:
+                throw new Error(`Unrecognized audio queue job name: ${job.name}`);
+            }
+          },
+        );
+      } finally {
+        stateMachine.endWork();
+      }
+    },
+    { concurrency: config.worker.concurrency, maxAttempts: ASSEMBLY_MAX_ATTEMPTS },
+  );
+
+  assemblyWorker.on('error', (err) => logError(logger, err, 'Assembly worker error'));
+
+  processingJobSweeper.start();
+
   logger.info(
     { concurrency: config.worker.concurrency },
-    `${config.app.serviceName} ready, consuming maintenance and parse queues`,
+    `${config.app.serviceName} ready, consuming maintenance, parse, and audio queues`,
   );
 
   const shutdown = async (signal: string): Promise<void> => {
     logger.info({ signal }, 'Received shutdown signal — starting graceful shutdown');
     stateMachine.transition('DRAINING');
     try {
+      await processingJobSweeper.stop();
       await queueManager.close();
       await ocrProvider.terminate?.();
       await disconnectPrisma(prisma);

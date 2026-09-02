@@ -52,7 +52,7 @@ function sampleResult(overrides: Partial<IngestionResult> = {}): IngestionResult
     qualityReport: { outcome: 'PASS', checks: [] },
     parserIdentity: { providerId: 'pdfjs-dist', modelId: 'pdf-text-extractor', version: '4.9.155' },
     ocrIdentity: null,
-    normalizationVersion: 'normalize.v1',
+    normalizationVersion: 'normalize.v2',
     configHash: 'a'.repeat(64),
     rawTextContentHash: 'b'.repeat(64),
     contentHash: 'c'.repeat(64),
@@ -232,7 +232,7 @@ describe('processIngestionJob', () => {
   it('persists chapters/paragraphs, marks the job SUCCEEDED, and emits book.parsed + book.structure_ready', async () => {
     const mock = makeMockPrisma();
     mock.seedModelVersion('PARSER', 'pdfjs-dist', 'pdf-text-extractor', '4.9.155');
-    mock.seedModelVersion('NORMALIZER', 'audio-book-normalizer', 'text-normalizer', 'normalize.v1');
+    mock.seedModelVersion('NORMALIZER', 'audio-book-normalizer', 'text-normalizer', 'normalize.v2');
     mock.processingJobs.set('job-1', {
       id: 'job-1',
       tenantId: 'tenant-1',
@@ -286,7 +286,7 @@ describe('processIngestionJob', () => {
   it('resolves and records the OCR model version only on pages that were actually OCR’d, in a mixed digital+OCR book', async () => {
     const mock = makeMockPrisma();
     mock.seedModelVersion('PARSER', 'pdfjs-dist', 'pdf-text-extractor', '4.9.155');
-    mock.seedModelVersion('NORMALIZER', 'audio-book-normalizer', 'text-normalizer', 'normalize.v1');
+    mock.seedModelVersion('NORMALIZER', 'audio-book-normalizer', 'text-normalizer', 'normalize.v2');
     mock.seedModelVersion('OCR', 'tesseract.js', 'tesseract-eng', '5.1.1');
     mock.processingJobs.set('job-1', {
       id: 'job-1',
@@ -363,7 +363,7 @@ describe('processIngestionJob', () => {
   it('reuses an existing BookVersion when the same content was already ingested under this pipeline version', async () => {
     const mock = makeMockPrisma();
     mock.seedModelVersion('PARSER', 'pdfjs-dist', 'pdf-text-extractor', '4.9.155');
-    mock.seedModelVersion('NORMALIZER', 'audio-book-normalizer', 'text-normalizer', 'normalize.v1');
+    mock.seedModelVersion('NORMALIZER', 'audio-book-normalizer', 'text-normalizer', 'normalize.v2');
     mock.processingJobs.set('job-1', {
       id: 'job-1',
       tenantId: 'tenant-1',

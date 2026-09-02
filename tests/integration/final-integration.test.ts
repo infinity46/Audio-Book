@@ -62,6 +62,28 @@ describe('Final Phase 1 integration test: HTTP-shaped trigger -> Outbox -> Redis
 
   afterAll(async () => {
     await publisher?.stop();
+
+    // Remove this test's own BullMQ entries before closing the connection.
+    // The queue is shared infrastructure that outlives the run: BullMQ keeps
+    // completed jobs (`removeOnComplete: { age: 24h }`) and retains failed ones
+    // indefinitely, while this test's Postgres cleanup below deletes the
+    // ProcessingJob rows those entries point at. A later run's worker could
+    // then pick up a leftover entry, find no matching row, and fail with
+    // "Record to update not found" — a failure in a completely unrelated test
+    // whose real cause is this one's residue.
+    try {
+      for (const state of ['completed', 'failed', 'wait', 'delayed', 'active'] as const) {
+        const jobs = await queueManager.queue('maintenance').getJobs([state], 0, 200);
+        await Promise.all(
+          jobs
+            .filter((job) => (job.data as { tenant_id?: string } | undefined)?.tenant_id === tenantId)
+            .map((job) => job.remove().catch(() => undefined)),
+        );
+      }
+    } catch {
+      /* best-effort: never fail teardown over queue tidy-up */
+    }
+
     await queueManager?.close();
     // FK order: eventInbox has no FK to tenant, but outboxMessage and
     // processingJob do — both must go before the tenant itself.
@@ -135,6 +157,15 @@ describe('Final Phase 1 integration test: HTTP-shaped trigger -> Outbox -> Redis
       pollIntervalMs: 100,
       batchSize: 10,
       publish: async (row) => {
+        // The relay is global by design — it drains every PENDING outbox row,
+        // whoever wrote it. In a shared database that means rows left behind by
+        // other suites (whose ProcessingJob rows have since been cleaned up)
+        // get forwarded to this test's worker, which then fails updating a row
+        // that no longer exists. The failure surfaces here while the cause lies
+        // elsewhere entirely. Restrict this test's relay to its own tenant so
+        // it is hermetic; the production relay in providers.module.ts is
+        // deliberately unfiltered and is not what is under test here.
+        if (row.tenantId !== tenantId) return;
         await queueManager.enqueue(
           'maintenance',
           {

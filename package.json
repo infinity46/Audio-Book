@@ -2,7 +2,7 @@
   "name": "audio-book",
   "private": true,
   "version": "0.0.0",
-  "description": "AI Audiobook Generator — monorepo root",
+  "description": "AI Audiobook Generator \u2014 monorepo root",
   "engines": {
     "node": ">=20.0.0",
     "pnpm": ">=9.0.0"
@@ -22,7 +22,8 @@
     "prisma:migrate:dev": "prisma migrate dev --schema prisma/schema.prisma",
     "contracts:generate": "pnpm --filter @audio-book/contracts run generate",
     "schema:drift-check": "tsx infra/scripts/schema-drift-check.ts",
-    "db:seed": "tsx infra/scripts/seed.ts"
+    "db:seed": "tsx infra/scripts/seed.ts",
+    "test:e2e": "vitest run --config vitest.e2e.config.ts"
   },
   "devDependencies": {
     "@audio-book/api": "workspace:*",
@@ -31,6 +32,7 @@
     "@audio-book/database": "workspace:*",
     "@audio-book/errors": "workspace:*",
     "@audio-book/events": "workspace:*",
+    "@audio-book/ingestion": "workspace:*",
     "@audio-book/logging": "workspace:*",
     "@audio-book/observability": "workspace:*",
     "@audio-book/queue": "workspace:*",
@@ -41,6 +43,7 @@
     "@types/node": "^22.10.2",
     "eslint": "^9.17.0",
     "ioredis": "^5.4.2",
+    "jose": "^5.9.6",
     "prettier": "^3.4.2",
     "prisma": "^5.22.0",
     "tsx": "^4.19.2",

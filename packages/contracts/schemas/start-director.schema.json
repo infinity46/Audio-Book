@@ -1,0 +1,19 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["scope"],
+  "properties": {
+    "scope": { "type": "string", "enum": ["BOOK", "CHAPTERS"] },
+    "chapter_ids": {
+      "type": "array",
+      "items": { "type": "string", "format": "uuid" },
+      "minItems": 1,
+      "maxItems": 500
+    },
+    "director_version": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "force": { "type": "boolean" },
+    "priority": { "type": "string", "enum": ["INTERACTIVE", "NORMAL", "BULK"] },
+    "acknowledge_version_mixing": { "type": "boolean" }
+  }
+}

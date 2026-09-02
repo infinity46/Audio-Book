@@ -42,7 +42,10 @@ export interface IngestionConfig {
 
 export const DEFAULT_INGESTION_CONFIG: IngestionConfig = {
   pipelineVersion: 'ingestion.v1',
-  normalizationVersion: 'normalize.v1',
+  // v2: cross-page hyphenation is now rejoined (F-1). This changes canonical
+  // text and therefore every downstream content hash, so the version moves
+  // with it — historical BookVersions stay attributable to normalize.v1.
+  normalizationVersion: 'normalize.v2',
   maxFileSizeBytes: 200 * 1024 * 1024,
   maxPages: 3000,
   maxEpubEntryCount: 10_000,
@@ -65,3 +68,12 @@ export const DEFAULT_INGESTION_CONFIG: IngestionConfig = {
 export function defaultIngestionConfig(): IngestionConfig {
   return { ...DEFAULT_INGESTION_CONFIG };
 }
+
+/**
+ * Identifies the concrete parser library versions a `parse_book` job's
+ * idempotency key is scoped to (distinct from `pipelineVersion`, which
+ * covers the whole pipeline's behavior for `BookVersion.pipelineVersion`).
+ * Shared by apps/api's book-upload flow and worker-cpu's ProcessingJobSweeper
+ * so a re-enqueued job's idempotency key always matches the original.
+ */
+export const PARSER_VERSION_FOR_IDEMPOTENCY = 'pdfjs-dist@4.9.155+epub-spine-reader@1.0.0';

@@ -75,6 +75,14 @@ pnpm --filter @audio-book/api run start:dev
 pnpm --filter @audio-book/worker-cpu run start:dev
 ```
 
+> **Note on the API's dev loop.** `start:dev` compiles with `tsc` and runs the
+> compiled output under Node's watcher, rather than executing the TypeScript
+> directly. NestJS resolves constructor injection from `design:paramtypes`
+> metadata, which only `tsc` emits — under an esbuild-based runner every
+> injected dependency is `undefined` and every route returns a `500` while
+> `/health` still answers `200` (this was QA finding F-13). For rebuild-on-save,
+> run `pnpm --filter @audio-book/api run build:watch` in a second terminal.
+
 ...and the Python workers:
 
 ```bash
@@ -101,6 +109,7 @@ curl http://localhost:8082/health   # worker-gpu liveness
 pnpm test                 # TypeScript unit tests, per-package
 pnpm test:contract         # envelope / StorageProvider / Queue / Outbox / Inbox contract tests
 pnpm test:integration       # requires local infra running (see above)
+pnpm -r run build && pnpm test:e2e   # boots the compiled services, drives them over real HTTP
 pnpm schema:drift-check      # asserts the migrated DB matches database-schema.md's constraints/indexes
 
 cd python && uv run pytest

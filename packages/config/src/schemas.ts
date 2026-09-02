@@ -45,6 +45,16 @@ export const storageEnvSchema = z.object({
   STORAGE_FORCE_PATH_STYLE: z.coerce.boolean().default(true),
 });
 
+/**
+ * An env var that is present but empty (`FOO=`) is indistinguishable from one
+ * that was never set, and treating them differently is a reliable source of
+ * "it works on my machine". Normalizes both to `undefined`.
+ */
+const emptyStringAsUndefined = z
+  .string()
+  .optional()
+  .transform((v) => (v === undefined || v.trim() === '' ? undefined : v));
+
 // Left as a plain ZodObject (not `.refine()`d here) so it stays mergeable —
 // `.refine()` returns a ZodEffects, which z.object(...).merge() cannot
 // accept. The "one of JWKS URL or public key" cross-field rule is applied
@@ -52,8 +62,14 @@ export const storageEnvSchema = z.object({
 export const authEnvSchema = z.object({
   AUTH_JWT_ISSUER: z.string().min(1, 'AUTH_JWT_ISSUER is required'),
   AUTH_JWT_AUDIENCE: z.string().min(1, 'AUTH_JWT_AUDIENCE is required'),
-  AUTH_JWT_JWKS_URL: z.string().optional(),
-  AUTH_JWT_PUBLIC_KEY: z.string().optional(),
+  // An unset env var and one set to the empty string must mean the same
+  // thing. `.env.example` ships both of these as empty (`AUTH_JWT_JWKS_URL=`),
+  // so without this normalization an operator who supplies a public key still
+  // presents an empty-string JWKS URL — which used to satisfy `??` and make
+  // the cross-field check in index.ts ignore the public key entirely, so the
+  // service could not start at all.
+  AUTH_JWT_JWKS_URL: emptyStringAsUndefined,
+  AUTH_JWT_PUBLIC_KEY: emptyStringAsUndefined,
 });
 
 export const httpEnvSchema = z.object({
@@ -73,6 +89,38 @@ export const workerEnvSchema = z.object({
 export const outboxPublisherEnvSchema = z.object({
   OUTBOX_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(500),
   OUTBOX_BATCH_SIZE: z.coerce.number().int().positive().default(50),
+});
+
+/**
+ * Rate-limit buckets from api-specification.md §14.3. The buckets themselves
+ * are contract; the numbers are explicitly `configuration` in the spec, so
+ * they live here as env-tunable defaults rather than being frozen in code.
+ *
+ * Defaults are deliberately generous enough not to impede normal interactive
+ * use and strict enough to bound abuse; they are starting points to be tuned
+ * against measured traffic, not researched limits.
+ *
+ * `stream` (SSE) is absent because this API exposes no SSE endpoint yet, and
+ * `auth` is absent because the auth endpoints themselves are not implemented
+ * (see the JwtAuthGuard docstring). Adding either means adding its bucket.
+ */
+export const rateLimitEnvSchema = z.object({
+  RATE_LIMIT_ENABLED: z
+    .enum(['true', 'false'])
+    .default('true')
+    .transform((v) => v === 'true'),
+  /** Window length shared by every bucket below. */
+  RATE_LIMIT_WINDOW_SECONDS: z.coerce.number().int().positive().default(60),
+  /** All GET endpoints. */
+  RATE_LIMIT_READ_PER_WINDOW: z.coerce.number().int().positive().default(300),
+  /** POST/PATCH/DELETE on metadata. */
+  RATE_LIMIT_WRITE_PER_WINDOW: z.coerce.number().int().positive().default(60),
+  /** Upload-session creation and finalization. */
+  RATE_LIMIT_UPLOAD_PER_WINDOW: z.coerce.number().int().positive().default(20),
+  /** Pipeline-starting endpoints: ingestion, analysis, director, tts, assembly, previews. */
+  RATE_LIMIT_EXPENSIVE_PER_WINDOW: z.coerce.number().int().positive().default(10),
+  /** Signed-URL minting. */
+  RATE_LIMIT_ACCESS_URL_PER_WINDOW: z.coerce.number().int().positive().default(60),
 });
 
 /** Tunable resource limits/behavior for the ingestion pipeline (task §63/§75/§118). Defaults match @audio-book/ingestion's own DEFAULT_INGESTION_CONFIG. */

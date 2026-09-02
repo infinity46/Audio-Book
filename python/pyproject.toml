@@ -96,7 +96,7 @@ ignore_missing_imports = true
 # Tests
 # --------------------------------------------------------------------------- #
 [tool.pytest.ini_options]
-testpaths = ["workers-common/tests", "worker-ai/tests"]
+testpaths = ["workers-common/tests", "worker-ai/tests", "worker-gpu/tests"]
 asyncio_mode = "auto"
 addopts = "-q --strict-markers --strict-config"
 filterwarnings = ["error"]

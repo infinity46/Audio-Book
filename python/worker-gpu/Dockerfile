@@ -3,16 +3,25 @@
 # BUILD CONTEXT IS `python/`, not the repo root and not this directory:
 #     docker build -f worker-gpu/Dockerfile -t worker-gpu:dev python/
 #
-# PHASE 1 NOTE ON THE BASE IMAGE: this is a plain slim image, not a CUDA one, because
-# Phase 1 loads no model and links no CUDA. When the real TTS provider lands, this
-# FROM becomes an `nvidia/cuda:*-runtime-*` base and the runtime stage gains the
-# NVIDIA_VISIBLE_DEVICES / NVIDIA_DRIVER_CAPABILITIES env vars. Shipping a multi-GB
-# CUDA image now, to run a stub that allocates no GPU memory, would be waste.
+# BASE IMAGE NOTE: this stays a plain slim image, not a CUDA one, deliberately. The
+# default `TTS_PROVIDER=mock` links no GPU library at all, and `kokoro` (this image's
+# first real provider, via the `kokoro` extra below) runs on `onnxruntime`'s CPU backend
+# with no CUDA requirement either (`deployment-architecture.md` §6/§38: local TTS is
+# explicitly permitted to run CPU-only in development). A provider that genuinely needs
+# CUDA (a GPU build of onnxruntime, or a future XTTS adapter) is the point at which this
+# FROM becomes an `nvidia/cuda:*-runtime-*` base and the runtime stage gains
+# NVIDIA_VISIBLE_DEVICES / NVIDIA_DRIVER_CAPABILITIES -- not before, since shipping a
+# multi-GB CUDA image to run a CPU-bound engine would be waste.
 
 # ---------------------------------------------------------------- builder ---
 # Pinned to an exact patch version. A human should replace these tags with digest
 # pins (`python:3.12.14-slim-bookworm@sha256:...`) before this reaches production.
 FROM python:3.12.14-slim-bookworm AS builder
+
+# Set to "kokoro" to install the optional TTS engine extra; left empty (the default)
+# keeps the image at its minimal, mock-only footprint. Declared inside this stage
+# (not before the first FROM) because it is only ever needed here.
+ARG TTS_EXTRA=
 
 COPY --from=ghcr.io/astral-sh/uv:0.12.7 /uv /usr/local/bin/uv
 
@@ -30,7 +39,8 @@ COPY worker-ai/pyproject.toml worker-ai/
 COPY worker-gpu/pyproject.toml worker-gpu/
 
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev --no-install-project --package worker-gpu
+    uv sync --frozen --no-dev --no-install-project --package worker-gpu \
+    $(test -n "$TTS_EXTRA" && echo "--extra $TTS_EXTRA")
 
 COPY workers-common/ workers-common/
 COPY worker-gpu/ worker-gpu/
@@ -40,7 +50,8 @@ COPY worker-gpu/ worker-gpu/
 # script shebangs do once the venv is copied to /app in the runtime stage.
 # This installs real copies instead, making the venv self-contained.
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev --no-editable --package worker-gpu
+    uv sync --frozen --no-dev --no-editable --package worker-gpu \
+    $(test -n "$TTS_EXTRA" && echo "--extra $TTS_EXTRA")
 
 # ---------------------------------------------------------------- runtime ---
 FROM python:3.12.14-slim-bookworm AS runtime

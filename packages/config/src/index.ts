@@ -8,6 +8,7 @@ import {
   metricsEnvSchema,
   ocrEnvSchema,
   outboxPublisherEnvSchema,
+  rateLimitEnvSchema,
   redisEnvSchema,
   storageEnvSchema,
   workerEnvSchema,
@@ -99,6 +100,19 @@ export interface OutboxPublisherSection {
   batchSize: number;
 }
 
+/** api-specification.md §14.3 buckets. Limits are per window, per identity. */
+export interface RateLimitSection {
+  enabled: boolean;
+  windowSeconds: number;
+  buckets: {
+    read: number;
+    write: number;
+    upload: number;
+    expensive: number;
+    access_url: number;
+  };
+}
+
 export interface IngestionSection {
   maxFileSizeBytes: number;
   maxPages: number;
@@ -131,6 +145,7 @@ export interface ApiConfig {
   models: ModelsSection;
   databasePool: DatabasePoolSection;
   outboxPublisher: OutboxPublisherSection;
+  rateLimit: RateLimitSection;
 }
 
 export interface WorkerConfig {
@@ -151,7 +166,10 @@ const apiEnvSchema = appEnvSchema
   .merge(httpEnvSchema)
   .merge(metricsEnvSchema)
   .merge(outboxPublisherEnvSchema)
-  .refine((v) => Boolean(v.AUTH_JWT_JWKS_URL ?? v.AUTH_JWT_PUBLIC_KEY), {
+  .merge(rateLimitEnvSchema)
+  // `||`, not `??`: an empty-string JWKS URL must fall through to the public
+  // key rather than short-circuiting as "provided" (see authEnvSchema).
+  .refine((v) => Boolean(v.AUTH_JWT_JWKS_URL || v.AUTH_JWT_PUBLIC_KEY), {
     message: 'one of AUTH_JWT_JWKS_URL or AUTH_JWT_PUBLIC_KEY must be set',
     path: ['AUTH_JWT_JWKS_URL'],
   });
@@ -206,6 +224,17 @@ export function buildApiConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig 
     outboxPublisher: {
       pollIntervalMs: parsed.OUTBOX_POLL_INTERVAL_MS,
       batchSize: parsed.OUTBOX_BATCH_SIZE,
+    },
+    rateLimit: {
+      enabled: parsed.RATE_LIMIT_ENABLED,
+      windowSeconds: parsed.RATE_LIMIT_WINDOW_SECONDS,
+      buckets: {
+        read: parsed.RATE_LIMIT_READ_PER_WINDOW,
+        write: parsed.RATE_LIMIT_WRITE_PER_WINDOW,
+        upload: parsed.RATE_LIMIT_UPLOAD_PER_WINDOW,
+        expensive: parsed.RATE_LIMIT_EXPENSIVE_PER_WINDOW,
+        access_url: parsed.RATE_LIMIT_ACCESS_URL_PER_WINDOW,
+      },
     },
   };
 }

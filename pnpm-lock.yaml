@@ -26,6 +26,9 @@ importers:
       '@audio-book/events':
         specifier: workspace:*
         version: link:packages/events
+      '@audio-book/ingestion':
+        specifier: workspace:*
+        version: link:packages/ingestion
       '@audio-book/logging':
         specifier: workspace:*
         version: link:packages/logging
@@ -56,6 +59,9 @@ importers:
       ioredis:
         specifier: ^5.4.2
         version: 5.11.1
+      jose:
+        specifier: ^5.9.6
+        version: 5.10.0
       prettier:
         specifier: ^3.4.2
         version: 3.9.6
@@ -356,6 +362,9 @@ importers:
 
   packages/queue:
     dependencies:
+      '@audio-book/database':
+        specifier: workspace:*
+        version: link:../database
       bullmq:
         specifier: ^5.34.1
         version: 5.81.4

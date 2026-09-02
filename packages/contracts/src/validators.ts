@@ -37,6 +37,25 @@ export const updateCharacterAliasSchema = loadSchema('update-character-alias.sch
 export const createCharacterMergeSchema = loadSchema('create-character-merge.schema.json');
 export const createPronunciationEntrySchema = loadSchema('create-pronunciation-entry.schema.json');
 export const updatePronunciationEntrySchema = loadSchema('update-pronunciation-entry.schema.json');
+export const startDirectorSchema = loadSchema('start-director.schema.json');
+export const reviseDirectorSchema = loadSchema('revise-director.schema.json');
+export const updateAudioScriptChunkSchema = loadSchema('update-audio-script-chunk.schema.json');
+export const startTtsSchema = loadSchema('start-tts.schema.json');
+export const createVoiceProfileSchema = loadSchema('create-voice-profile.schema.json');
+export const updateVoiceProfileSchema = loadSchema('update-voice-profile.schema.json');
+export const createVoiceProfileVersionSchema = loadSchema(
+  'create-voice-profile-version.schema.json',
+);
+export const approveVoiceProfileVersionSchema = loadSchema(
+  'approve-voice-profile-version.schema.json',
+);
+export const lockVoiceProfileVersionSchema = loadSchema('lock-voice-profile-version.schema.json');
+export const createVoicePreviewSchema = loadSchema('create-voice-preview.schema.json');
+export const assignVoiceSchema = loadSchema('assign-voice.schema.json');
+export const narratorFallbackSchema = loadSchema('narrator-fallback.schema.json');
+export const createAccessUrlSchema = loadSchema('create-access-url.schema.json');
+export const startAssemblySchema = loadSchema('start-assembly.schema.json');
+export const updateAudiobookMetadataSchema = loadSchema('update-audiobook-metadata.schema.json');
 
 export const validateCommandEnvelope: ValidateFunction = ajv.compile(commandEnvelopeSchema);
 export const validateEventEnvelope: ValidateFunction = ajv.compile(eventEnvelopeSchema);
