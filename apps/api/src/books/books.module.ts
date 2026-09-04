@@ -1,9 +1,11 @@
 import { Module } from '@nestjs/common';
+import { ProgressModule } from '../progress/progress.module.js';
 import { BooksController } from './books.controller.js';
 import { BooksService } from './books.service.js';
 import { UploadSessionStore } from './upload-session.store.js';
 
 @Module({
+  imports: [ProgressModule],
   controllers: [BooksController],
   providers: [BooksService, UploadSessionStore],
 })

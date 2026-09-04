@@ -70,6 +70,29 @@ export const authEnvSchema = z.object({
   // service could not start at all.
   AUTH_JWT_JWKS_URL: emptyStringAsUndefined,
   AUTH_JWT_PUBLIC_KEY: emptyStringAsUndefined,
+  // Phase 10: token *issuance*. `JwtAuthGuard` only ever verifies (JWKS URL or
+  // AUTH_JWT_PUBLIC_KEY above); this is the matching PKCS8 private key
+  // AuthService signs with. Optional at the schema level — a deployment that
+  // verifies externally-issued tokens and never mints its own has no use for
+  // it — but required at runtime by AuthService the moment `/auth/login` is
+  // actually called (api-specification.md §16.1), which fails closed with a
+  // clear "issuance not configured" error rather than signing with nothing.
+  AUTH_JWT_PRIVATE_KEY: emptyStringAsUndefined,
+  /** api-specification.md §16.1 login response example: `expires_in: 900`. */
+  AUTH_ACCESS_TOKEN_TTL_SECONDS: z.coerce.number().int().positive().default(900),
+  /** `context.md` §18.1: refresh tokens are long-lived and rotate on use. */
+  AUTH_REFRESH_TOKEN_TTL_SECONDS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(60 * 60 * 24 * 30),
+  /** §16.1: "Password strength rules are `configuration`." */
+  AUTH_PASSWORD_MIN_LENGTH: z.coerce.number().int().positive().default(8),
+  /** §16.1: enumeration protection, "default **on**". */
+  AUTH_ENUMERATION_PROTECTION: z.coerce.boolean().default(true),
+  /** §14.11/§16.1: "progressive delay and lockout on repeated failure." */
+  AUTH_LOGIN_MAX_FAILED_ATTEMPTS: z.coerce.number().int().positive().default(5),
+  AUTH_LOGIN_LOCKOUT_SECONDS: z.coerce.number().int().positive().default(900),
 });
 
 export const httpEnvSchema = z.object({
@@ -100,9 +123,10 @@ export const outboxPublisherEnvSchema = z.object({
  * use and strict enough to bound abuse; they are starting points to be tuned
  * against measured traffic, not researched limits.
  *
- * `stream` (SSE) is absent because this API exposes no SSE endpoint yet, and
- * `auth` is absent because the auth endpoints themselves are not implemented
- * (see the JwtAuthGuard docstring). Adding either means adding its bucket.
+ * `stream` (SSE) is absent because this API exposes no SSE endpoint yet.
+ *
+ * `auth` (Phase 10): `/api/v1/auth/**` (`api-specification.md` §14.3 —
+ * "strictest; also subject to progressive delay and lockout").
  */
 export const rateLimitEnvSchema = z.object({
   RATE_LIMIT_ENABLED: z
@@ -121,6 +145,8 @@ export const rateLimitEnvSchema = z.object({
   RATE_LIMIT_EXPENSIVE_PER_WINDOW: z.coerce.number().int().positive().default(10),
   /** Signed-URL minting. */
   RATE_LIMIT_ACCESS_URL_PER_WINDOW: z.coerce.number().int().positive().default(60),
+  /** `/auth/register`, `/auth/login`, `/auth/password-reset`, `/auth/mfa` — the strictest bucket. */
+  RATE_LIMIT_AUTH_PER_WINDOW: z.coerce.number().int().positive().default(10),
 });
 
 /** Tunable resource limits/behavior for the ingestion pipeline (task §63/§75/§118). Defaults match @audio-book/ingestion's own DEFAULT_INGESTION_CONFIG. */
@@ -150,6 +176,25 @@ export const ingestionEnvSchema = z.object({
   INGESTION_MAX_IMAGE_PIXELS: z.coerce.number().int().positive().default(100_000_000),
   INGESTION_MAX_IMAGE_PAGES: z.coerce.number().int().positive().default(3000),
   INGESTION_OCR_LOW_CONFIDENCE_THRESHOLD: z.coerce.number().min(0).max(1).default(0.6),
+});
+
+/**
+ * Phase 10 storage lifecycle (`database-schema.md` §27.5 — "windows are
+ * configuration"). Centralized here, in the one place every runtime that
+ * needs a retention number already imports from, rather than as a literal
+ * repeated in `apps/api` and `apps/worker-cpu` separately.
+ */
+export const retentionEnvSchema = z.object({
+  /** §16.6.2/§27.1: how long a soft-deleted book stays restorable before it is purge-eligible. */
+  RETENTION_SOFT_DELETE_DAYS: z.coerce.number().int().positive().default(30),
+  /** §27.5: "failed artifacts retained for diagnosis for a bounded window, then expired." */
+  RETENTION_ORPHAN_ARTIFACT_TTL_HOURS: z.coerce.number().int().positive().default(48),
+  /** How often `worker-cpu`'s retention sweep runs. */
+  RETENTION_SWEEP_INTERVAL_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(6 * 60 * 60 * 1000),
 });
 
 /**

@@ -24,7 +24,12 @@ export class AjvValidationPipe implements PipeTransform {
   }
 
   transform(value: unknown): unknown {
-    const valid = this.validator(value);
+    // A request with no body (e.g. a Phase 10 empty-body POST like
+    // /books/{id}/restoration) arrives here as `undefined`/`null`, not `{}`
+    // — an empty JSON object is what every schema for such an endpoint
+    // actually expects to validate against.
+    const normalized = value ?? {};
+    const valid = this.validator(normalized);
     if (!valid) {
       const details = (this.validator.errors ?? []).map((e) => ({
         field: e.instancePath.replace(/^\//, '').replace(/\//g, '.') || undefined,
@@ -32,7 +37,7 @@ export class AjvValidationPipe implements PipeTransform {
       }));
       throw new ValidationError({ message: 'Request validation failed.', details });
     }
-    return value;
+    return normalized;
   }
 }
 

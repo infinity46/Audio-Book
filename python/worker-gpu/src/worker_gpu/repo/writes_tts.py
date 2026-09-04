@@ -19,6 +19,9 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from workers_common.events import write_outbox_message
+from workers_common.logging import get_logger
+
+log = get_logger(__name__)
 
 PIPELINE_VERSION = "pipeline.v1"
 
@@ -455,6 +458,52 @@ async def write_tts_event(
     )
 
 
+async def record_gpu_minutes_usage(session: AsyncSession, *, tenant_id: str, minutes: float) -> None:
+    """Phase 10 quota completion (`database-schema.md` §7.5, `common/quota.service.ts`'s
+    TypeScript counterpart on the API side). `minutes` is wall-clock GPU time actually spent
+    synthesizing this chunk, not the output audio's duration -- those are unrelated
+    quantities, and the quota is meant to bound compute cost, not narration length.
+
+    Best-effort and never allowed to fail the job: usage under-reporting is a billing
+    inaccuracy, not an outage, matching `QuotaService.recordUsage`'s exact reasoning on the
+    Node side. Calendar-month periods and the upsert-by-increment shape mirror that same
+    method so a tenant's `tenant_usage_counter` rows stay meaningful regardless of which
+    runtime incremented them.
+    """
+    if minutes <= 0:
+        return
+    now = datetime.now(UTC)
+    period_start = datetime(now.year, now.month, 1, tzinfo=UTC)
+    period_end = (
+        datetime(now.year + 1, 1, 1, tzinfo=UTC)
+        if now.month == 12
+        else datetime(now.year, now.month + 1, 1, tzinfo=UTC)
+    )
+    try:
+        await session.execute(
+            text(
+                """
+                INSERT INTO tenant_usage_counter
+                    (id, tenant_id, period_start, period_end, metric, used_value, created_at, updated_at)
+                VALUES (:id, :tenant_id, :period_start, :period_end, 'GPU_MINUTES', :used_value, :now, :now)
+                ON CONFLICT (tenant_id, period_start, metric)
+                DO UPDATE SET used_value = tenant_usage_counter.used_value + EXCLUDED.used_value,
+                    updated_at = :now
+                """
+            ),
+            {
+                "id": str(uuid.uuid4()),
+                "tenant_id": tenant_id,
+                "period_start": period_start,
+                "period_end": period_end,
+                "used_value": round(minutes),
+                "now": now,
+            },
+        )
+    except Exception:  # noqa: BLE001 - best-effort, see docstring
+        log.warning("gpu_minutes_usage.record_failed", tenant_id=tenant_id, minutes=minutes)
+
+
 __all__ = [
     "PIPELINE_VERSION",
     "begin_tts_job",
@@ -465,6 +514,7 @@ __all__ = [
     "mark_tts_job_failed",
     "mark_voice_preview_failed",
     "mark_voice_preview_ready",
+    "record_gpu_minutes_usage",
     "write_tts_event",
     "write_voice_event",
 ]

@@ -26,6 +26,7 @@ result shape are already the ones that job would use.
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from worker_gpu.repo import model_registry, reads_tts, writes_tts
@@ -151,6 +152,11 @@ async def handle_generate_tts_chunk(
     # ---- The risky, external work: outside any open transaction -----------------------
     request = _build_request(job, tts_job, chunk, voice_version, ctx.is_final_attempt, ctx.attempt)
 
+    # Wall-clock GPU time, for Phase 10 quota accounting (GPU_MINUTES) below --
+    # deliberately the compute time, not `result.duration_ms` (the *output audio's*
+    # duration), which is an unrelated quantity a slow or fast model could produce in
+    # very different amounts of actual GPU time.
+    synthesis_started = time.monotonic()
     try:
         outcome = await synthesize_and_check(provider, request, voice_cache)
         result = outcome.result.model_copy(update={"generation_version": generation_version})
@@ -159,6 +165,7 @@ async def handle_generate_tts_chunk(
         tts_error = classify_provider_error(exc)
         await _record_failure(ctx, job_id, tts_job_id, tts_error)
         raise to_job_error(tts_error) from exc
+    synthesis_seconds = time.monotonic() - synthesis_started
 
     storage_key = (
         f"{job.tenant_id}/books/{job.book_id}/audio/chunks/{chunk.id}/v{generation_version}.wav"
@@ -214,6 +221,9 @@ async def handle_generate_tts_chunk(
         )
         await writes_tts.mark_job_succeeded(
             session, job_id, result_resource_type="audio_chunk", result_resource_id=audio_chunk_id
+        )
+        await writes_tts.record_gpu_minutes_usage(
+            session, tenant_id=job.tenant_id, minutes=synthesis_seconds / 60
         )
         await writes_tts.write_tts_event(
             session,

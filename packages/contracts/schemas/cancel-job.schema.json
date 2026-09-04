@@ -1,0 +1,10 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "CancelJob",
+  "description": "POST /api/v1/jobs/{jobId}/cancellation — api-specification.md §16.18. Cancellation is cooperative and idempotent; the body carries only an optional human reason recorded on the audit trail.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "reason": { "type": "string", "maxLength": 512 }
+  }
+}

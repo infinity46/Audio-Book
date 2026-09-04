@@ -8,7 +8,7 @@
  * inherits a sane limit the day it is added.
  */
 
-export type RateLimitBucket = 'read' | 'write' | 'upload' | 'expensive' | 'access_url';
+export type RateLimitBucket = 'read' | 'write' | 'upload' | 'expensive' | 'access_url' | 'auth';
 
 /** Pipeline-starting sub-resources — §14.3's `expensive` bucket. */
 const EXPENSIVE_SEGMENTS = [
@@ -28,6 +28,12 @@ export function resolveBucket(method: string, path: string): RateLimitBucket {
   const pathname = (path.split('?')[0] ?? '').replace(/\/+$/, '');
   const segments = pathname.split('/').filter(Boolean);
   const last = segments.at(-1) ?? '';
+
+  // §14.3: `/auth/**` is its own, strictest bucket — checked before the
+  // GET/HEAD short-circuit below because it also governs the read-shaped
+  // parts of that surface (there are none today, but a future GET under
+  // /auth/** must not silently fall into the much larger `read` bucket).
+  if (segments[0] === 'api' && segments[1] === 'v1' && segments[2] === 'auth') return 'auth';
 
   if (verb === 'GET' || verb === 'HEAD') return 'read';
 

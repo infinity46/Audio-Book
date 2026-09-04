@@ -16,11 +16,11 @@ architecture.
 ## Repository layout
 
 ```
-apps/            api (NestJS), worker-cpu (Node) — deployable TypeScript services
+apps/            web (Next.js studio + BFF), api (NestJS), worker-cpu (Node) — deployable TypeScript services
 packages/        shared TypeScript libraries (config, logging, errors, database, events, queue, storage, observability, contracts)
 python/          worker-ai, worker-gpu (Python, uv workspace) + shared workers-common
 prisma/          schema.prisma + migrations (see prisma/README.md for what's hand-written vs generated)
-docs/             architecture/ (authoritative design docs), contracts/ (JSON Schema convention)
+docs/             architecture/ (authoritative design docs), application/ (API usage, errors, frontend), contracts/ (JSON Schema convention)
 infra/            Dockerfiles, dev scripts
 tests/            integration and contract tests spanning multiple packages
 ```
@@ -58,6 +58,24 @@ Migrations are **never** run automatically by an application process at
 startup (`deployment-architecture.md` §27) — always run this explicitly,
 as a deliberate step, before starting services that depend on the new
 schema.
+
+## Open the studio
+
+```bash
+cp apps/web/.env.example apps/web/.env.local   # point AUDIOBOOK_API_URL at the API
+pnpm --filter @audio-book/web dev              # http://localhost:3001
+```
+
+`apps/web` is **Audiobook Studio** — the production workflow UI. It is a client
+of the `/api/v1` surface and reaches nothing else: no database, no Redis, no
+object storage beyond the signed URLs the API mints.
+
+Signing in needs an access token from the deployment's identity provider. This
+application issues none — the API verifies an externally-issued RS256 bearer
+and implements no auth endpoints (see `docs/application/frontend-api-gaps.md`,
+GAP-1). The studio holds that token in a server-side, httpOnly session cookie.
+
+See `docs/application/frontend-architecture.md` for how it is put together.
 
 ## Start services
 

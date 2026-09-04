@@ -48,6 +48,7 @@ from typing import TYPE_CHECKING, Any
 from bullmq import Job, UnrecoverableError, Worker
 from pydantic import ValidationError
 
+from workers_common.cancellation import CancellationGate
 from workers_common.config import WorkerSettings
 from workers_common.correlation import bind_job_context
 from workers_common.events import SimpleJobEnvelope
@@ -132,6 +133,11 @@ class QueueConsumer:
         self._db = db
         self._storage = storage
         self._worker: Worker | None = None
+        # Cooperative cancellation, read side (event-contracts.md §29). Built
+        # here rather than injected so that every consumer has one and no queue
+        # can be wired up without it -- the same "derive, do not decorate"
+        # reasoning the TypeScript rate limiter documents.
+        self._cancellation = CancellationGate(db, str(settings.secrets.redis_url))
 
     async def start(self) -> None:
         """Begin consuming.
@@ -203,6 +209,12 @@ class QueueConsumer:
         with bind_job_context(envelope, worker_id=self._settings.app.worker_id):
             self._health.job_started()
             try:
+                # §29.3: the check happens BEFORE the expensive step, never after.
+                # Returning here acks the BullMQ job, which is correct: the work is
+                # cancelled, not failed, so it must not re-enter the retry path.
+                if await self._cancellation.halt_if_cancelled(str(envelope.job_id)):
+                    log.info("job.cancelled", message_type=message_type, bullmq_job_id=job.id)
+                    return
                 log.info("job.started", message_type=message_type, bullmq_job_id=job.id)
                 await self._handler(context)
                 log.info("job.completed", message_type=message_type)

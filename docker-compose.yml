@@ -96,6 +96,35 @@ services:
       retries: 10
       start_period: 15s
 
+  web:
+    build:
+      context: .
+      dockerfile: infra/docker/web.Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      SERVICE_NAME: web
+      # Server-only. The browser never learns this address: every call it makes
+      # is same-origin, to the app's own /bff mount (context.md §3.1 — `web`
+      # holds the session and calls `api`).
+      AUDIOBOOK_API_URL: http://api:3000
+      WEB_PUBLIC_ORIGIN: http://localhost:3001
+      # Plain HTTP in development, so the session cookie cannot carry `Secure`
+      # and therefore cannot use the `__Host-` prefix. Never set this in
+      # staging or production.
+      SESSION_COOKIE_SECURE: "false"
+    ports:
+      - "3001:3001"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3001/sign-in').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
   worker-cpu:
     build:
       context: .
@@ -159,7 +188,11 @@ services:
     build:
       context: ./python
       dockerfile: worker-gpu/Dockerfile
+      args:
+        TTS_EXTRA: kokoro
     restart: unless-stopped
+    volumes:
+      - ./models/kokoro:/models/kokoro:ro
     environment:
       ENVIRONMENT: development
       SERVICE_NAME: worker-gpu
@@ -173,17 +206,21 @@ services:
       STORAGE_BUCKET: audiobook-dev
       STORAGE_ACCESS_KEY_ID: minioadmin
       STORAGE_SECRET_ACCESS_KEY: minioadmin
-      # MockTTSProvider (deployment-architecture.md §6's mandatory GPU-free dev
-      # capability) — deterministic tone synthesis, no GPU/model backend required.
-      # Set TTS_PROVIDER=kokoro (plus KOKORO_MODEL_PATH/KOKORO_VOICES_PATH, and
-      # build this image with --build-arg TTS_EXTRA=kokoro) to run the real
-      # CPU-capable engine instead.
+      # Real CPU-capable engine (deployment-architecture.md §6 also names Kokoro as
+      # the first non-mock provider wired up): model weights are fetched by the
+      # operator into ./models/kokoro (see python/worker-gpu/src/worker_gpu/tts/
+      # providers/kokoro.py's docstring for the download command) and mounted
+      # read-only above. Set TTS_PROVIDER back to `mock` (MockTTSProvider,
+      # deployment-architecture.md §6's mandatory GPU-free dev capability) for
+      # deterministic tone synthesis with no model backend at all.
       # worker-gpu is always its own deployment unit — never co-located with
       # any other service, even in local Compose — matching the mandatory GPU
       # isolation rule from context.md §18 / tts-provider-specification.md §3.1.
-      MODEL_ID: mock-tts-v0
-      TTS_PROVIDER: mock
+      MODEL_ID: kokoro-v1
+      TTS_PROVIDER: kokoro
       TTS_MODEL_VERSION: v1
+      KOKORO_MODEL_PATH: /models/kokoro/kokoro-v1.0.int8.onnx
+      KOKORO_VOICES_PATH: /models/kokoro/voices-v1.0.bin
     ports:
       - "8082:8080"
     depends_on:

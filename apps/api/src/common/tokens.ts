@@ -6,3 +6,4 @@ export const REDIS = Symbol('REDIS');
 export const QUEUE_MANAGER = Symbol('QUEUE_MANAGER');
 export const OUTBOX_PUBLISHER = Symbol('OUTBOX_PUBLISHER');
 export const STORAGE_PROVIDER = Symbol('STORAGE_PROVIDER');
+export const EVENT_STREAM_CONFIG = Symbol('EVENT_STREAM_CONFIG');

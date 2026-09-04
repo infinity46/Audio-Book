@@ -30,6 +30,7 @@ import { AjvValidationPipe } from '../common/pipes/ajv-validation.pipe.js';
 import { JwtAuthGuard, type AuthenticatedPrincipal } from '../common/guards/jwt-auth.guard.js';
 import { RateLimitGuard } from '../common/guards/rate-limit.guard.js';
 import { TenantRoleGuard } from '../common/guards/tenant-role.guard.js';
+import { BookPurgeGuard } from '../common/guards/book-purge.guard.js';
 import { IdempotencyService } from '../common/idempotency.service.js';
 import {
   type ApproveVoiceProfileVersionBody,
@@ -64,7 +65,7 @@ function requireIdempotencyKey(key: string | undefined): string {
  * (no reference-audio cloning, no SYSTEM-profile snapshot-on-assign).
  */
 @Controller('api/v1')
-@UseGuards(JwtAuthGuard, TenantRoleGuard, RateLimitGuard)
+@UseGuards(JwtAuthGuard, TenantRoleGuard, RateLimitGuard, BookPurgeGuard)
 export class VoiceController {
   constructor(
     private readonly voice: VoiceService,

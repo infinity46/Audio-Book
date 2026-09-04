@@ -8,6 +8,15 @@ dist/
 build/
 *.tsbuildinfo
 **/dist/
+.next/
+**/.next/
+next-env.d.ts
+
+# Playwright
+playwright-report/
+test-results/
+blob-report/
+.playwright/
 
 # Env / secrets — never commit real env files
 .env
@@ -42,6 +51,10 @@ pnpm-debug.log*
 
 # Local infra volumes
 infra/docker/volumes/
+
+# Downloaded TTS model weights (worker-gpu, TTS_PROVIDER=kokoro) — fetched by
+# the operator, never committed.
+models/
 
 # Coverage
 coverage/

@@ -13,7 +13,11 @@ import { MetricsRegistry } from '@audio-book/observability';
 import { QueueManager } from '@audio-book/queue';
 import { S3StorageProvider, type StorageProvider } from '@audio-book/storage';
 import { Redis } from 'ioredis';
+import { AuditService } from './audit.service.js';
 import { IdempotencyService } from './idempotency.service.js';
+import { QuotaService } from './quota.service.js';
+import { QuotaGuard } from './guards/quota.guard.js';
+import { BookPurgeGuard } from './guards/book-purge.guard.js';
 import {
   API_CONFIG,
   LOGGER,
@@ -159,6 +163,10 @@ const idempotencyServiceProvider = IdempotencyService;
     storageProvider,
     outboxPublisherProvider,
     idempotencyServiceProvider,
+    AuditService,
+    QuotaService,
+    QuotaGuard,
+    BookPurgeGuard,
   ],
   exports: [
     API_CONFIG,
@@ -170,6 +178,10 @@ const idempotencyServiceProvider = IdempotencyService;
     STORAGE_PROVIDER,
     OUTBOX_PUBLISHER,
     IdempotencyService,
+    AuditService,
+    QuotaService,
+    QuotaGuard,
+    BookPurgeGuard,
   ],
 })
 // Graceful shutdown (stop intake -> drain -> close DB/Redis/queue -> flush

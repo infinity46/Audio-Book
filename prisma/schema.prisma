@@ -820,6 +820,12 @@ enum AuditAction {
   ROLE_CHANGED
   SESSION_REVOKED
   REFRESH_TOKEN_REUSE_DETECTED
+  /// Phase 10 — api-specification.md §16.1: "Creates User and tenant; emits
+  /// user.registered."
+  USER_REGISTERED
+  /// Phase 10 — api-specification.md §16.1 login: "Side effects: Creates a
+  /// session and a refresh-token family; audit record written."
+  LOGIN_SUCCEEDED
 
   @@map("audit_action")
 }
@@ -1329,6 +1335,7 @@ model ParsedPage {
   paragraphs Paragraph[]
 
   @@unique([bookVersionId, pageNumber])
+  @@index([bookId, status])
   @@map("parsed_page")
 }
 
@@ -1376,6 +1383,7 @@ model Chapter {
 
   @@unique([id, bookId])
   @@index([bookVersionId, matterType])
+  @@index([bookId])
   @@map("chapter")
 }
 
@@ -1442,6 +1450,7 @@ model Scene {
   audioScriptChunks       AudioScriptChunk[]
   audioChunks             AudioChunk[]
 
+  @@index([bookId])
   @@map("scene")
 }
 
@@ -1794,6 +1803,7 @@ model SceneSemantics {
 
   @@unique([sceneId, storyBibleVersionId])
   @@index([storyBibleVersionId, bookId])
+  @@index([bookId])
   @@map("scene_semantics")
 }
 

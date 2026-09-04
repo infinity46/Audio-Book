@@ -1,0 +1,293 @@
+@import 'tailwindcss';
+
+/*
+ * AUDIOBOOK STUDIO — design system (Phase 9 rules 102–105).
+ *
+ * The product is a production tool, not a file-upload page, so the surface
+ * language is borrowed from studio hardware: deep neutral panels, a single
+ * warm amber accent used sparingly for the live/active state, and typography
+ * tuned for the four strings this app shows most — long book titles, character
+ * names, chapter titles, and dense metadata.
+ *
+ * Colour is never the only carrier of status (rule 103): every status token is
+ * paired with a text label and a glyph at the component level.
+ */
+
+@theme {
+  --font-sans:
+    ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Inter, Roboto, 'Helvetica Neue',
+    sans-serif;
+  --font-mono:
+    ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+
+  /* Spacing rhythm — a 4px base, so every gap is a multiple of one unit. */
+  --radius-panel: 0.75rem;
+  --radius-control: 0.5rem;
+  --radius-pill: 9999px;
+}
+
+/*
+ * Light is the default palette and is defined on bare `:root`; dark redefines
+ * only the tokens. Both are complete — no colour has its only definition
+ * inside a media query.
+ */
+:root {
+  color-scheme: light;
+
+  --canvas: oklch(98.4% 0.003 250);
+  --panel: oklch(100% 0 0);
+  --panel-raised: oklch(97% 0.004 250);
+  --panel-sunken: oklch(95.5% 0.005 250);
+  --overlay-scrim: oklch(20% 0.02 250 / 0.45);
+
+  --text-primary: oklch(23% 0.015 260);
+  --text-secondary: oklch(45% 0.014 260);
+  /*
+   * 48%, not the 58% this started at: at 58% the muted text measured ~3.3:1 on
+   * the white panel and failed WCAG 1.4.3 for body-size text — caught by the
+   * Playwright axe run, which resolves real CSS where the jsdom scan cannot.
+   * This clears 4.5:1 with margin, at every size the studio uses it.
+   */
+  --text-muted: oklch(48% 0.014 260);
+  --text-inverse: oklch(99% 0 0);
+
+  --border-subtle: oklch(92% 0.005 260);
+  --border-default: oklch(87% 0.007 260);
+  --border-strong: oklch(72% 0.01 260);
+
+  --accent: oklch(48% 0.13 62);
+  --accent-hover: oklch(42% 0.13 62);
+  --accent-soft: oklch(95% 0.035 70);
+  --accent-text: oklch(38% 0.11 62);
+
+  --tone-neutral: oklch(44% 0.012 260);
+  --tone-neutral-soft: oklch(94.5% 0.005 260);
+  --tone-progress: oklch(44% 0.13 250);
+  --tone-progress-soft: oklch(95% 0.03 250);
+  --tone-success: oklch(42% 0.11 155);
+  --tone-success-soft: oklch(94.5% 0.04 155);
+  --tone-warning: oklch(43% 0.11 75);
+  --tone-warning-soft: oklch(95% 0.05 85);
+  --tone-danger: oklch(45% 0.16 25);
+  --tone-danger-soft: oklch(95.5% 0.03 25);
+
+  --focus-ring: oklch(52% 0.16 250);
+
+  --shadow-panel: 0 1px 2px oklch(20% 0.02 260 / 0.05), 0 1px 3px oklch(20% 0.02 260 / 0.06);
+  --shadow-raised: 0 4px 12px oklch(20% 0.02 260 / 0.08), 0 1px 3px oklch(20% 0.02 260 / 0.06);
+  --shadow-overlay: 0 16px 48px oklch(20% 0.02 260 / 0.18);
+}
+
+:root[data-theme='dark'],
+:root:not([data-theme='light']) {
+  @media (prefers-color-scheme: dark) {
+    color-scheme: dark;
+
+    --canvas: oklch(17.5% 0.012 265);
+    --panel: oklch(21.5% 0.014 265);
+    --panel-raised: oklch(25% 0.016 265);
+    --panel-sunken: oklch(19% 0.013 265);
+    --overlay-scrim: oklch(10% 0.01 265 / 0.65);
+
+    --text-primary: oklch(95% 0.005 260);
+    --text-secondary: oklch(78% 0.008 260);
+    /* Same requirement in reverse: 64% measured ~4.2:1 on the dark panel. */
+    --text-muted: oklch(72% 0.01 260);
+    --text-inverse: oklch(18% 0.012 265);
+
+    --border-subtle: oklch(28% 0.014 265);
+    --border-default: oklch(34% 0.016 265);
+    --border-strong: oklch(48% 0.018 265);
+
+    --accent: oklch(76% 0.13 68);
+    --accent-hover: oklch(83% 0.13 70);
+    --accent-soft: oklch(30% 0.05 62);
+    --accent-text: oklch(82% 0.12 70);
+
+    --tone-neutral: oklch(72% 0.01 260);
+    --tone-neutral-soft: oklch(27% 0.012 265);
+    --tone-progress: oklch(76% 0.11 245);
+    --tone-progress-soft: oklch(28% 0.05 250);
+    --tone-success: oklch(78% 0.13 155);
+    --tone-success-soft: oklch(27% 0.05 158);
+    --tone-warning: oklch(82% 0.13 82);
+    --tone-warning-soft: oklch(29% 0.05 80);
+    --tone-danger: oklch(72% 0.16 25);
+    --tone-danger-soft: oklch(29% 0.07 25);
+
+    --focus-ring: oklch(78% 0.13 245);
+
+    --shadow-panel: 0 1px 2px oklch(0% 0 0 / 0.3);
+    --shadow-raised: 0 4px 14px oklch(0% 0 0 / 0.35);
+    --shadow-overlay: 0 20px 56px oklch(0% 0 0 / 0.5);
+  }
+}
+
+/* The explicit dark choice must win over a light system preference too. */
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  --canvas: oklch(17.5% 0.012 265);
+  --panel: oklch(21.5% 0.014 265);
+  --panel-raised: oklch(25% 0.016 265);
+  --panel-sunken: oklch(19% 0.013 265);
+  --overlay-scrim: oklch(10% 0.01 265 / 0.65);
+
+  --text-primary: oklch(95% 0.005 260);
+  --text-secondary: oklch(78% 0.008 260);
+  /* Same requirement in reverse: 64% measured ~4.2:1 on the dark panel. */
+  --text-muted: oklch(72% 0.01 260);
+  --text-inverse: oklch(18% 0.012 265);
+
+  --border-subtle: oklch(28% 0.014 265);
+  --border-default: oklch(34% 0.016 265);
+  --border-strong: oklch(48% 0.018 265);
+
+  --accent: oklch(76% 0.13 68);
+  --accent-hover: oklch(83% 0.13 70);
+  --accent-soft: oklch(30% 0.05 62);
+  --accent-text: oklch(82% 0.12 70);
+
+  --tone-neutral: oklch(72% 0.01 260);
+  --tone-neutral-soft: oklch(27% 0.012 265);
+  --tone-progress: oklch(76% 0.11 245);
+  --tone-progress-soft: oklch(28% 0.05 250);
+  --tone-success: oklch(78% 0.13 155);
+  --tone-success-soft: oklch(27% 0.05 158);
+  --tone-warning: oklch(82% 0.13 82);
+  --tone-warning-soft: oklch(29% 0.05 80);
+  --tone-danger: oklch(72% 0.16 25);
+  --tone-danger-soft: oklch(29% 0.07 25);
+
+  --focus-ring: oklch(78% 0.13 245);
+
+  --shadow-panel: 0 1px 2px oklch(0% 0 0 / 0.3);
+  --shadow-raised: 0 4px 14px oklch(0% 0 0 / 0.35);
+  --shadow-overlay: 0 20px 56px oklch(0% 0 0 / 0.5);
+}
+
+/* Expose the tokens to Tailwind's utility namespace. */
+@theme inline {
+  --color-canvas: var(--canvas);
+  --color-panel: var(--panel);
+  --color-panel-raised: var(--panel-raised);
+  --color-panel-sunken: var(--panel-sunken);
+  --color-fg: var(--text-primary);
+  --color-fg-secondary: var(--text-secondary);
+  --color-fg-muted: var(--text-muted);
+  --color-fg-inverse: var(--text-inverse);
+  --color-line: var(--border-default);
+  --color-line-subtle: var(--border-subtle);
+  --color-line-strong: var(--border-strong);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-text: var(--accent-text);
+  --color-neutral-tone: var(--tone-neutral);
+  --color-progress-tone: var(--tone-progress);
+  --color-success-tone: var(--tone-success);
+  --color-warning-tone: var(--tone-warning);
+  --color-danger-tone: var(--tone-danger);
+}
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    background-color: var(--canvas);
+    color: var(--text-primary);
+    font-family: var(--font-sans);
+    /* Long book titles and character names benefit from real kerning. */
+    font-feature-settings: 'kern' 1, 'liga' 1;
+    text-rendering: optimizeLegibility;
+    min-height: 100dvh;
+  }
+
+  /*
+   * One visible, high-contrast focus ring for every interactive element
+   * (rules 83, 84). `:focus-visible` keeps it off mouse clicks without ever
+   * removing it from keyboard traversal.
+   */
+  :focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: 2px;
+    border-radius: 0.25rem;
+  }
+
+  [hidden] {
+    display: none !important;
+  }
+
+  ::selection {
+    background: var(--accent-soft);
+    color: var(--text-primary);
+  }
+
+  /* Rule 83 — honour a reduced-motion preference everywhere, not per-component. */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.001ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.001ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+@layer components {
+  /* Skip link — first tab stop on every page. */
+  .skip-link {
+    position: absolute;
+    left: 0.5rem;
+    top: -3rem;
+    z-index: 100;
+    background: var(--panel);
+    color: var(--text-primary);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-control);
+    padding: 0.5rem 0.875rem;
+    font-weight: 600;
+    transition: top 120ms ease;
+  }
+  .skip-link:focus {
+    top: 0.5rem;
+  }
+
+  /* The indeterminate shimmer used by skeletons (rule 80). */
+  .skeleton {
+    background: linear-gradient(
+      90deg,
+      var(--panel-sunken) 0%,
+      var(--panel-raised) 50%,
+      var(--panel-sunken) 100%
+    );
+    background-size: 200% 100%;
+    animation: skeleton-sweep 1.4s ease-in-out infinite;
+    border-radius: var(--radius-control);
+  }
+
+  @keyframes skeleton-sweep {
+    0% {
+      background-position: 200% 0;
+    }
+    100% {
+      background-position: -200% 0;
+    }
+  }
+
+  /*
+   * A book passage rendered as content, never as markup (rules 123–125).
+   * The text arrives as a React text node, so it is escaped by construction;
+   * this class only makes it read as a quotation rather than as UI copy.
+   */
+  .book-text {
+    font-family: Georgia, 'Iowan Old Style', 'Times New Roman', serif;
+    line-height: 1.65;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+}

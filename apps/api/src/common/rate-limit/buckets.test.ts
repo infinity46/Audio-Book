@@ -50,6 +50,16 @@ describe('resolveBucket', () => {
     expect(resolveBucket('POST', '/api/v1/books/b1/ingestion?force=true')).toBe('expensive');
   });
 
+  it('routes /auth/** to its own strictest bucket, even for POST', () => {
+    expect(resolveBucket('POST', '/api/v1/auth/register')).toBe('auth');
+    expect(resolveBucket('POST', '/api/v1/auth/login')).toBe('auth');
+    expect(resolveBucket('POST', '/api/v1/auth/mfa')).toBe('auth');
+    expect(resolveBucket('POST', '/api/v1/auth/refresh')).toBe('auth');
+    expect(resolveBucket('POST', '/api/v1/auth/logout')).toBe('auth');
+    expect(resolveBucket('POST', '/api/v1/auth/password-reset')).toBe('auth');
+    expect(resolveBucket('POST', '/api/v1/auth/password-reset/confirm')).toBe('auth');
+  });
+
   it('never returns undefined for an unrecognized route', () => {
     // A route nobody thought about must still land somewhere restrictive-ish,
     // never fall through unlimited.

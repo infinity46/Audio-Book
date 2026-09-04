@@ -56,8 +56,24 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # ---------------------------------------------------------------- runtime ---
 FROM python:3.12.14-slim-bookworm AS runtime
 
+# Redeclared: ARGs don't cross stage boundaries. Only used below to decide whether
+# `espeak-ng` is worth the apt layer -- the mock-only image stays free of it.
+ARG TTS_EXTRA=
+
 RUN groupadd --gid 10001 worker \
     && useradd --uid 10001 --gid 10001 --no-create-home --shell /usr/sbin/nologin worker
+
+# `espeak-ng`, system-wide: `KokoroProvider` phonemizes text through its C library
+# (`worker_gpu/tts/providers/kokoro.py`'s `_resolve_espeak_config`), pointed at this
+# install rather than the pip `espeakng_loader` package's bundled copy -- that copy
+# ships a shared library built with its build machine's absolute data path baked in,
+# which fails with "No such file or directory" on any other machine
+# (github.com/thewh1teagle/kokoro-onnx#120). Skipped when TTS_EXTRA is unset so the
+# default mock-only image stays at its minimal footprint.
+RUN if [ "$TTS_EXTRA" = "kokoro" ]; then \
+      apt-get update && apt-get install -y --no-install-recommends espeak-ng \
+      && rm -rf /var/lib/apt/lists/*; \
+    fi
 
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \

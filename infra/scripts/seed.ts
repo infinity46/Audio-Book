@@ -5,7 +5,7 @@
  * must never contain production secrets. Safe to run repeatedly (upsert).
  */
 import { createHash } from 'node:crypto';
-import { createPrismaClient, disconnectPrisma, type PrismaClient } from '@audio-book/database';
+import { createPrismaClient, disconnectPrisma, Prisma, type PrismaClient } from '@audio-book/database';
 import { generateId } from '@audio-book/events';
 
 const DEV_TENANT_ID = '018f4e1a-dead-7000-8000-000000000001';
@@ -108,6 +108,16 @@ const TTS_MODEL_VERSIONS = [
     modelId: 'mock-tone',
     version: 'v1',
   },
+  // KokoroProvider.model_identity (python/worker-gpu/src/worker_gpu/tts/providers/
+  // kokoro.py) — registered unconditionally alongside mock-tts so a deployment can
+  // flip TTS_PROVIDER to `kokoro` without a separate seed step; only the row
+  // matching the provider actually configured ever gets resolved.
+  {
+    role: 'TTS' as const,
+    providerId: 'kokoro-v1',
+    modelId: 'kokoro',
+    version: 'v1',
+  },
 ];
 
 /**
@@ -202,29 +212,46 @@ async function resolveModelVersionId(
 
 const DEV_VOICE_PROFILE_ID = '018f4e1a-dead-7000-8000-000000000af1';
 const DEV_VOICE_PROFILE_VERSION_ID = '018f4e1a-dead-7000-8000-000000000af2';
+const KOKORO_VOICE_PROFILE_ID = '018f4e1a-dead-7000-8000-000000000af3';
+const KOKORO_VOICE_PROFILE_VERSION_ID = '018f4e1a-dead-7000-8000-000000000af4';
+
+interface DevVoiceProfileSeed {
+  profileId: string;
+  versionId: string;
+  name: string;
+  description: string;
+  ttsProviderId: string;
+  ttsModelId: string;
+  ttsModelVersionEntry: ModelVersionSeed;
+  baseGenerationParams: Prisma.InputJsonValue;
+}
 
 /**
- * A single TENANT-scoped, already-`APPROVED` voice profile bound to
- * `MockTTSProvider` — so a book in the dev tenant can be cast and rendered
- * end-to-end (`PUT .../characters/{id}/voice` -> `POST .../tts`) without
- * first walking the full preview/approval workflow. TENANT scope (not
- * SYSTEM) is deliberate: it is directly assignable to any book in this
- * tenant, and it sidesteps the SYSTEM-profile "tenant snapshot on binding"
- * mechanic (`api-specification.md` §16.14) that this codebase does not yet
- * implement (see `voice.service.ts`'s docstring for that scope note).
+ * A single TENANT-scoped, already-`APPROVED` voice profile bound to one TTS
+ * provider — so a book in the dev tenant can be cast and rendered end-to-end
+ * (`PUT .../characters/{id}/voice` -> `POST .../tts`) without first walking the
+ * full preview/approval workflow. TENANT scope (not SYSTEM) is deliberate: it is
+ * directly assignable to any book in this tenant, and it sidesteps the
+ * SYSTEM-profile "tenant snapshot on binding" mechanic (`api-specification.md`
+ * §16.14) that this codebase does not yet implement (see `voice.service.ts`'s
+ * docstring for that scope note). Called once per registered `TTS_MODEL_VERSIONS`
+ * entry so switching `TTS_PROVIDER` never leaves the dev tenant without a
+ * castable voice for whichever provider is actually configured.
  */
-async function seedDefaultVoiceProfile(
+async function seedDevVoiceProfile(
   prisma: PrismaClient,
   tenantId: string,
   userId: string,
+  seed: DevVoiceProfileSeed,
 ): Promise<void> {
-  const ttsModelVersionId = await resolveModelVersionId(prisma, TTS_MODEL_VERSIONS[0]!);
-  const baseGenerationParams = {};
+  const ttsModelVersionId = await resolveModelVersionId(prisma, seed.ttsModelVersionEntry);
   const baseGenerationParamsHash = createHash('sha256')
-    .update(JSON.stringify(baseGenerationParams))
+    .update(JSON.stringify(seed.baseGenerationParams))
     .digest('hex');
   const identityFingerprint = createHash('sha256')
-    .update(['mock-tts', ttsModelVersionId, 'en-US', baseGenerationParamsHash, '', ''].join(':'))
+    .update(
+      [seed.ttsProviderId, ttsModelVersionId, 'en-US', baseGenerationParamsHash, '', ''].join(':'),
+    )
     .digest('hex');
   const now = new Date();
 
@@ -232,14 +259,14 @@ async function seedDefaultVoiceProfile(
   // and the column has a real FK to it (`voice_profile_active_version_id_fkey`) — it is
   // set in a follow-up update once the version row below actually exists.
   await prisma.voiceProfile.upsert({
-    where: { id: DEV_VOICE_PROFILE_ID },
+    where: { id: seed.profileId },
     update: {},
     create: {
-      id: DEV_VOICE_PROFILE_ID,
+      id: seed.profileId,
       scope: 'TENANT',
       tenantId,
-      name: 'Default Narrator (Mock)',
-      description: 'Seeded MockTTSProvider narrator voice for local development.',
+      name: seed.name,
+      description: seed.description,
       versionCount: 1,
       lockState: 'UNLOCKED',
       intendedCharacterIds: [],
@@ -248,19 +275,19 @@ async function seedDefaultVoiceProfile(
   });
 
   await prisma.voiceProfileVersion.upsert({
-    where: { id: DEV_VOICE_PROFILE_VERSION_ID },
+    where: { id: seed.versionId },
     update: {},
     create: {
-      id: DEV_VOICE_PROFILE_VERSION_ID,
+      id: seed.versionId,
       tenantId,
-      voiceProfileId: DEV_VOICE_PROFILE_ID,
+      voiceProfileId: seed.profileId,
       version: 1,
-      ttsProviderId: 'mock-tts',
-      ttsModelId: 'mock-tone',
+      ttsProviderId: seed.ttsProviderId,
+      ttsModelId: seed.ttsModelId,
       ttsModelVersionId,
       language: 'en-US',
       supportedLanguages: ['en-US'],
-      baseGenerationParams,
+      baseGenerationParams: seed.baseGenerationParams,
       baseGenerationParamsHash,
       approvalState: 'APPROVED',
       approvedByUserId: userId,
@@ -277,8 +304,8 @@ async function seedDefaultVoiceProfile(
   });
 
   await prisma.voiceProfile.update({
-    where: { id: DEV_VOICE_PROFILE_ID },
-    data: { activeVersionId: DEV_VOICE_PROFILE_VERSION_ID, activeVersionNumber: 1 },
+    where: { id: seed.profileId },
+    data: { activeVersionId: seed.versionId, activeVersionNumber: 1 },
   });
 }
 
@@ -333,7 +360,26 @@ async function main(): Promise<void> {
   await seedModelVersions(prisma, DIRECTOR_MODEL_VERSIONS);
   await seedModelVersions(prisma, TTS_MODEL_VERSIONS);
   await seedModelVersions(prisma, AUDIO_TOOL_MODEL_VERSIONS);
-  await seedDefaultVoiceProfile(prisma, tenant.id, user.id);
+  await seedDevVoiceProfile(prisma, tenant.id, user.id, {
+    profileId: DEV_VOICE_PROFILE_ID,
+    versionId: DEV_VOICE_PROFILE_VERSION_ID,
+    name: 'Default Narrator (Mock)',
+    description: 'Seeded MockTTSProvider narrator voice for local development.',
+    ttsProviderId: 'mock-tts',
+    ttsModelId: 'mock-tone',
+    ttsModelVersionEntry: TTS_MODEL_VERSIONS[0]!,
+    baseGenerationParams: {},
+  });
+  await seedDevVoiceProfile(prisma, tenant.id, user.id, {
+    profileId: KOKORO_VOICE_PROFILE_ID,
+    versionId: KOKORO_VOICE_PROFILE_VERSION_ID,
+    name: 'Default Narrator (Kokoro)',
+    description: 'Seeded KokoroProvider narrator voice (af_heart) for local development.',
+    ttsProviderId: 'kokoro-v1',
+    ttsModelId: 'kokoro',
+    ttsModelVersionEntry: TTS_MODEL_VERSIONS[1]!,
+    baseGenerationParams: { kokoro_voice: 'af_heart' },
+  });
 
   console.log(`Seeded development tenant ${tenant.id} and user ${user.id} (${user.email})`);
   await disconnectPrisma(prisma);

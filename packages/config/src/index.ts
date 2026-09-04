@@ -10,6 +10,7 @@ import {
   outboxPublisherEnvSchema,
   rateLimitEnvSchema,
   redisEnvSchema,
+  retentionEnvSchema,
   storageEnvSchema,
   workerEnvSchema,
   type LogLevel,
@@ -81,8 +82,31 @@ export interface SecretsSection {
     jwtAudience: string;
     jwtJwksUrl?: string;
     jwtPublicKey?: string;
+    /** Phase 10 issuance key — see authEnvSchema's AUTH_JWT_PRIVATE_KEY docstring. */
+    jwtPrivateKey?: string;
   };
   metricsServiceToken: string;
+}
+
+/**
+ * Phase 10 — tunable, non-secret auth *behavior* (as opposed to `secrets.auth`,
+ * which is key material). Everything here is `configuration` per
+ * `api-specification.md` §16.1, not architecturally frozen.
+ */
+export interface AuthPolicySection {
+  accessTokenTtlSeconds: number;
+  refreshTokenTtlSeconds: number;
+  passwordMinLength: number;
+  enumerationProtection: boolean;
+  loginMaxFailedAttempts: number;
+  loginLockoutSeconds: number;
+}
+
+/** `database-schema.md` §27.5 storage-lifecycle windows — see retentionEnvSchema. */
+export interface RetentionSection {
+  softDeleteDays: number;
+  orphanArtifactTtlHours: number;
+  sweepIntervalMs: number;
 }
 
 /** Reserved for future model/provider references (Director LLM, TTS engines) — not populated in Phase 1. */
@@ -110,6 +134,7 @@ export interface RateLimitSection {
     upload: number;
     expensive: number;
     access_url: number;
+    auth: number;
   };
 }
 
@@ -146,6 +171,8 @@ export interface ApiConfig {
   databasePool: DatabasePoolSection;
   outboxPublisher: OutboxPublisherSection;
   rateLimit: RateLimitSection;
+  authPolicy: AuthPolicySection;
+  retention: RetentionSection;
 }
 
 export interface WorkerConfig {
@@ -156,6 +183,7 @@ export interface WorkerConfig {
   worker: { concurrency: number };
   ingestion: IngestionSection;
   ocr: OcrSection;
+  retention: RetentionSection;
 }
 
 const apiEnvSchema = appEnvSchema
@@ -167,6 +195,7 @@ const apiEnvSchema = appEnvSchema
   .merge(metricsEnvSchema)
   .merge(outboxPublisherEnvSchema)
   .merge(rateLimitEnvSchema)
+  .merge(retentionEnvSchema)
   // `||`, not `??`: an empty-string JWKS URL must fall through to the public
   // key rather than short-circuiting as "provided" (see authEnvSchema).
   .refine((v) => Boolean(v.AUTH_JWT_JWKS_URL || v.AUTH_JWT_PUBLIC_KEY), {
@@ -180,6 +209,7 @@ const workerEnvSchemaComposed = appEnvSchema
   .merge(storageEnvSchema)
   .merge(metricsEnvSchema)
   .merge(workerEnvSchema)
+  .merge(retentionEnvSchema)
   .merge(ingestionEnvSchema)
   .merge(ocrEnvSchema);
 
@@ -216,6 +246,7 @@ export function buildApiConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig 
         jwtAudience: parsed.AUTH_JWT_AUDIENCE,
         jwtJwksUrl: parsed.AUTH_JWT_JWKS_URL,
         jwtPublicKey: parsed.AUTH_JWT_PUBLIC_KEY,
+        jwtPrivateKey: parsed.AUTH_JWT_PRIVATE_KEY,
       },
       metricsServiceToken: parsed.METRICS_SERVICE_TOKEN,
     },
@@ -234,7 +265,21 @@ export function buildApiConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig 
         upload: parsed.RATE_LIMIT_UPLOAD_PER_WINDOW,
         expensive: parsed.RATE_LIMIT_EXPENSIVE_PER_WINDOW,
         access_url: parsed.RATE_LIMIT_ACCESS_URL_PER_WINDOW,
+        auth: parsed.RATE_LIMIT_AUTH_PER_WINDOW,
       },
+    },
+    authPolicy: {
+      accessTokenTtlSeconds: parsed.AUTH_ACCESS_TOKEN_TTL_SECONDS,
+      refreshTokenTtlSeconds: parsed.AUTH_REFRESH_TOKEN_TTL_SECONDS,
+      passwordMinLength: parsed.AUTH_PASSWORD_MIN_LENGTH,
+      enumerationProtection: parsed.AUTH_ENUMERATION_PROTECTION,
+      loginMaxFailedAttempts: parsed.AUTH_LOGIN_MAX_FAILED_ATTEMPTS,
+      loginLockoutSeconds: parsed.AUTH_LOGIN_LOCKOUT_SECONDS,
+    },
+    retention: {
+      softDeleteDays: parsed.RETENTION_SOFT_DELETE_DAYS,
+      orphanArtifactTtlHours: parsed.RETENTION_ORPHAN_ARTIFACT_TTL_HOURS,
+      sweepIntervalMs: parsed.RETENTION_SWEEP_INTERVAL_MS,
     },
   };
 }
@@ -284,6 +329,11 @@ export function buildWorkerConfig(env: NodeJS.ProcessEnv = process.env): WorkerC
       langPath: parsed.OCR_LANG_PATH,
       timeoutMs: parsed.OCR_TIMEOUT_MS,
       rasterScale: parsed.OCR_RASTER_SCALE,
+    },
+    retention: {
+      softDeleteDays: parsed.RETENTION_SOFT_DELETE_DAYS,
+      orphanArtifactTtlHours: parsed.RETENTION_ORPHAN_ARTIFACT_TTL_HOURS,
+      sweepIntervalMs: parsed.RETENTION_SWEEP_INTERVAL_MS,
     },
   };
 }

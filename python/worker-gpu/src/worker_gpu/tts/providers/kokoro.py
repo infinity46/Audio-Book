@@ -41,8 +41,11 @@ environment. Do not route production traffic to it before §73 has actually been
 from __future__ import annotations
 
 import asyncio
+import ctypes.util
+import os
 import time
 from functools import partial
+from pathlib import Path
 from typing import Any
 
 from worker_gpu.tts.audio import encode_wav
@@ -65,6 +68,42 @@ from worker_gpu.tts.text_prep import prepare_text
 _DEFAULT_VOICE = "af_heart"
 _NATIVE_SAMPLE_RATE = 24_000
 _MAX_INPUT_CHARS = 500
+
+# Common locations `espeak-ng`'s system package (apt's `espeak-ng`, Homebrew's
+# `espeak-ng`) installs its data directory to, checked in order.
+_ESPEAK_DATA_CANDIDATES = (
+    "/usr/share/espeak-ng-data",
+    "/opt/homebrew/opt/espeak-ng/share/espeak-ng-data",
+    "/usr/local/opt/espeak-ng/share/espeak-ng-data",
+)
+
+
+def _resolve_espeak_config() -> Any | None:
+    """Points `kokoro_onnx` at a real, system-installed `espeak-ng` instead of the
+    `espeakng_loader` pip package's bundled copy.
+
+    That bundled copy ships a shared library compiled with its build machine's
+    absolute data path baked in, which does not exist on the machine actually running
+    it — `espeak_ng_InitializePath()` fails with "No such file or directory" even
+    though the data files are present right next to the library
+    (github.com/thewh1teagle/kokoro-onnx#120, reproduced locally). `KOKORO_ESPEAK_*`
+    lets a deployment pin exact paths; otherwise this searches the well-known
+    locations the `espeak-ng` system package actually installs to.
+    """
+    from kokoro_onnx.config import EspeakConfig
+
+    lib_path = os.getenv("KOKORO_ESPEAK_LIBRARY_PATH") or ctypes.util.find_library(
+        "espeak-ng"
+    ) or ctypes.util.find_library("espeak")
+    data_path = os.getenv("KOKORO_ESPEAK_DATA_PATH")
+    if not data_path:
+        multiarch = Path("/usr/lib").glob("*/espeak-ng-data")
+        candidates = [*multiarch, *map(Path, _ESPEAK_DATA_CANDIDATES)]
+        data_path = next((str(c) for c in candidates if c.is_dir()), None)
+
+    if not lib_path or not data_path:
+        return None
+    return EspeakConfig(lib_path=lib_path, data_path=data_path)
 
 
 class KokoroProvider:
@@ -120,7 +159,9 @@ class KokoroProvider:
             ) from exc
 
         try:
-            self._engine = await asyncio.to_thread(Kokoro, self._model_path, self._voices_path)
+            self._engine = await asyncio.to_thread(
+                Kokoro, self._model_path, self._voices_path, _resolve_espeak_config()
+            )
             # §51/§18.1: MODEL_READY must mean "verified", not "a file was read" — run one
             # real synthesis before declaring readiness.
             await self._run_inference(f"warmup. model version {model_version_id}.", _DEFAULT_VOICE, 1.0)

@@ -16,6 +16,8 @@ import type { FastifyRequest } from 'fastify';
 import { AjvValidationPipe } from '../common/pipes/ajv-validation.pipe.js';
 import { JwtAuthGuard, type AuthenticatedPrincipal } from '../common/guards/jwt-auth.guard.js';
 import { RateLimitGuard } from '../common/guards/rate-limit.guard.js';
+import { QuotaGuard } from '../common/guards/quota.guard.js';
+import { BookPurgeGuard } from '../common/guards/book-purge.guard.js';
 import { TenantRoleGuard } from '../common/guards/tenant-role.guard.js';
 import { IdempotencyService } from '../common/idempotency.service.js';
 import { type CreateAccessUrlBody, type StartTtsBody, TtsService } from './tts.service.js';
@@ -39,7 +41,7 @@ function requireIdempotencyKey(key: string | undefined): string {
  * Mirrors `director.controller.ts`'s shape.
  */
 @Controller('api/v1/books/:bookId')
-@UseGuards(JwtAuthGuard, TenantRoleGuard, RateLimitGuard)
+@UseGuards(JwtAuthGuard, TenantRoleGuard, RateLimitGuard, QuotaGuard, BookPurgeGuard)
 export class TtsController {
   constructor(
     private readonly tts: TtsService,

@@ -84,6 +84,29 @@ export class QueueManager {
   }
 
   /**
+   * Removes a not-yet-running job from its queue, for the `QUEUED` /
+   * `RETRYING` rows of the cancellation table (`event-contracts.md` §29.2).
+   *
+   * Returns `false` when the job is absent (already consumed, already removed,
+   * or never enqueued) and when BullMQ refuses because the job is **active** —
+   * an active job cannot be pulled out from under a worker, which is exactly
+   * why cancellation of a `RUNNING` job is cooperative rather than preemptive.
+   * Callers must not read `false` as failure: the durable
+   * `cancellation_requested` write has already happened by then, so the worker
+   * still observes the flag at its next boundary.
+   */
+  async removeQueuedJob(name: QueueName, jobId: string): Promise<boolean> {
+    const job = await this.queue(name).getJob(jobId);
+    if (!job) return false;
+    try {
+      await job.remove();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * Creates a Worker for `name`, wrapping `processor` so a job that
    * exhausts its retry budget is copied onto `${name}-dlq` (never silently
    * dropped) before BullMQ marks it failed.

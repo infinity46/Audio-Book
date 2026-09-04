@@ -1,0 +1,11 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "PurgeBook",
+  "description": "POST /api/v1/books/{bookId}/purge — api-specification.md §16.6.3. `confirm_book_id` must equal the path parameter.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["confirm_book_id"],
+  "properties": {
+    "confirm_book_id": { "type": "string", "minLength": 1, "maxLength": 64 }
+  }
+}

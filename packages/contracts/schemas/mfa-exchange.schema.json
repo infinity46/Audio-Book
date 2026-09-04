@@ -1,0 +1,12 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "MfaExchange",
+  "description": "POST /api/v1/auth/mfa — api-specification.md §16.1. Factor enrollment is reserved (OQ-6); this only exchanges an mfa_token issued by a prior /auth/login call.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["mfa_token", "code"],
+  "properties": {
+    "mfa_token": { "type": "string", "minLength": 1, "maxLength": 512 },
+    "code": { "type": "string", "pattern": "^[0-9]{6}$" }
+  }
+}

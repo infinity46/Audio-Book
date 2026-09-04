@@ -1,5 +1,12 @@
 # QA Scorecard — Phase 7, Milestone 1
 
+> **Superseded in part by Phase 8.** Every finding below is re-checked in
+> [`phase-8-report.md`](./phase-8-report.md) §6, which records each one as
+> RESOLVED / MITIGATED / OPEN / UNKNOWN with evidence. Two entries here are
+> known to be **stale**: F-19 was fixed by migration `0002`, and F-20's drift
+> gate is now green (all 10 checks pass). Read this document for the Phase 7
+> measurements and the Phase 8 report for their current status.
+
 **Date:** 2026-09-01
 **Scope:** what was measured on a local development machine (macOS, no GPU, no
 container runtime; Postgres, Redis, and MinIO reachable on localhost).
@@ -8,7 +15,7 @@ Status vocabulary, applied strictly:
 
 - **PASS** — measured, with evidence named below.
 - **FAIL** — measured, and it does not hold.
-- **UNKNOWN** — *not measured*. Never a synonym for "probably fine". A
+- **UNKNOWN** — _not measured_. Never a synonym for "probably fine". A
   requirement with no test is `UNKNOWN` even when the code looks correct.
 
 There is deliberately no single overall score. A rolled-up number would hide
@@ -18,60 +25,60 @@ exactly the rows that matter.
 
 ## 1. Scorecard
 
-| # | Category | What was checked | Status | Evidence |
-|---|---|---|---|---|
-| 1 | Text fidelity | Source PDF → canonical text: no loss, duplication, or corruption of words, names, numbers, dates, punctuation, or non-ASCII | **PASS** | `packages/ingestion/src/golden-book.test.ts` (counts, not just presence) |
-| 2 | Text fidelity — hyphenation | Line-break hyphenation rejoined within a page | **PASS** | same |
-| 3 | Text fidelity — hyphenation | Hyphenation broken across a **page** boundary | **PASS** (after fix) | Finding F-1; `golden-book.test.ts` (promoted from `it.fails` once it held) |
-| 4 | OCR noise | Repeated header / bare page-number footer stripped, not narrated | **PASS** | `golden-book.test.ts`, `pipeline.test.ts` |
-| 5 | Structural fidelity | Chapter order and titles preserved | **PASS** | `golden-book.test.ts` |
-| 6 | Reproducibility (ingestion) | Same bytes + config → same `contentHash` / `rawTextContentHash` | **PASS** | `golden-book.test.ts`, `pipeline.test.ts` |
-| 7 | Tenant isolation | Cross-tenant reads across all 6 business services | **PASS** | `tests/integration/tenant-isolation.security.integration.test.ts` |
-| 8 | IDOR | ID substitution (own book id + foreign sub-resource id) for chapter, character, character-voice, aliases | **PASS** | same |
-| 9 | IDOR | ID substitution for AudioScript / AudioScriptChunk / AudioChunk / ChapterAudio / Audiobook | **UNKNOWN** | Not tested — fixtures need the full StoryBible + ModelVersion + TTS lineage chain. Book-level gate for those services *is* covered (row 7) |
-| 10 | Prompt injection | Instruction-shaped dialogue, fake system prompts, tool-call and markup payloads cannot produce an unregistered speaker | **PASS** | `python/worker-ai/tests/test_prompt_injection_resistance.py` |
-| 11 | LLM output validation | Provider output schema has no speaker/instruction field; smuggled extra fields rejected, not dropped | **PASS** | same |
-| 12 | Director validation | Unknown-speaker circuit breaker hard-fails a compromised run | **PASS** | same, plus `test_director_validation.py` |
-| 13 | Job dispatch reliability | A job committed to Postgres but never enqueued to Redis is recovered | **PASS** (after fix) | Finding F-2; `tests/integration/processing-job-sweeper.integration.test.ts` |
-| 14 | Idempotency (queue) | Re-enqueueing an already-queued job is a safe no-op | **PASS** | same test; BullMQ `addStandardJob` Lua jobId short-circuit |
-| 15 | Idempotency (HTTP) | `Idempotency-Key` dedup | **PASS** (pre-existing) | `IdempotencyKey` unique index + `idempotency.service.ts` |
-| 16 | Idempotency (job records) | DB-level uniqueness on `ProcessingJob.idempotencyKey` | **PASS** | Partial unique index verified against the live DB via `pg_indexes`. Previously reported as FAIL — see the retraction of F-3 |
-| 17 | Outbox / inbox | Transactional outbox → relay → idempotent inbox | **PASS** (mechanism) / **FAIL** (coverage) | Finding F-4 — real business job dispatch does not use it |
-| 18 | Retry / backoff / DLQ | Bounded retry, full-jitter backoff, dead-letter on exhaustion | **PASS** | `tests/integration/queue.integration.test.ts`, `backoff.test.ts` |
-| 19 | Audio validation | Clipping, silence, sample rate, channels, duration checks | **PASS** (after fix) | Finding F-5; `python/worker-gpu/tests/test_audio.py` |
-| 20 | Assembly ordering | Scrambled chunk insertion still assembles in canonical order, verified from decoded audio | **PASS** (pre-existing) | `assembly.integration.test.ts` bandpass check |
-| 21 | Packaging | Real ffprobe-verifiable M4B with correct chapter markers and durations | **PASS** (pre-existing) | `assembly.integration.test.ts` |
-| 22 | Secret scan | Hard-coded credentials, hosts, ports, model paths in `apps/` and `python/` | **PASS** | grep audit; only hit is a comment stating no such default exists |
-| 23 | Authorization — admin content boundary | `PLATFORM_ADMIN` refused on content surfaces and signed-URL minting (§6.6 MUST NOT) | **PASS** (after fix) | Finding F-6; `TenantRoleGuard` + `tenant-role.guard.test.ts` |
-| 23a | Authorization — deny by default | A principal with no tenant role, or a `SERVICE`/`WORKER` token, is refused on `/api/v1/**` | **PASS** (after fix) | same |
-| 24 | Rate limiting | Per-bucket throttling on read / write / upload / expensive / access_url | **PASS** (after fix) | Finding F-7; `buckets.test.ts`, `rate-limit.integration.test.ts` |
-| 24a | Rate limiting — availability | A Redis outage does not become an API outage | **PASS** | fail-open with a `degraded` signal; `rate-limit.integration.test.ts` |
-| 25 | Full-pipeline E2E | One book, upload → final audiobook, in a single run | **PASS** | `tests/e2e/full-pipeline.e2e.test.ts` chains upload → ingestion → analysis → **casting** → Director → TTS → assembly → packaged audiobook across both runtimes over real HTTP and real queues. All 7 stages green, twice consecutively. Reaching this required F-24 (concurrent jobs dead-lettered) and F-25 (the stage-6 assertion read a field the API never returns) |
-| 25e | Casting → Director ordering | Voices assignable before the Director, so every IR chunk carries a binding | **PASS** (after fix) | Finding F-22; stage 3 + stage 4's zero-unbound-chunks assertion |
-| 25d | Cross-language queue interop | Node BullMQ producer → Python BullMQ consumer on the same queues | **PASS** | same test; this is `architecture-review.md`'s High-Risk #9 surface, previously untested — and it is what surfaced F-14 |
-| 25a | HTTP contract E2E | Auth, authorization, isolation, idempotency, validation, error envelope against the running API | **PASS** | `tests/e2e/api-http.e2e.test.ts` (15 checks) — a layer that previously had no coverage at all |
-| 25b | Cross-process text fidelity | Golden-fixture text survives upload → storage → worker → DB → HTTP intact | **PASS** | same ingestion E2E; asserts rejoined hyphenation and stripped page headers after the full crossing |
-| 25c | Artifact lineage | A produced BookVersion traces back to its job, book file, and parser/normalizer provenance | **PASS** | same |
-| 26 | Voice consistency at scale | Same `VoiceProfileVersion` across distant chapters | **UNKNOWN** | Requires the full-pipeline harness |
-| 27 | Speaker attribution accuracy | Precision / recall / F1 against ground truth | **UNKNOWN** | No labelled corpus exists yet |
-| 28 | Speaker embedding similarity | Same-voice similarity across emotions and chapters | **UNKNOWN** | Requires real TTS + GPU |
-| 29 | Provider fallback | No silent provider switching under failure | **UNKNOWN** (code reviewed, not exercised) | `factory.py` selects one provider at startup; no runtime swap path found by inspection |
-| 30 | Performance baseline | Ingestion / Director / TTS RTF / assembly throughput | **UNKNOWN** | No GPU, no production-like host. **No numbers are published.** |
-| 31 | Load / concurrency | 1 → 50 concurrent users | **UNKNOWN** | Not run |
-| 32 | Long-form | 10h+ / 20h+ audiobook, 100+ chapters, 100k segments | **UNKNOWN** | Not run |
-| 33 | Large cast | 50+ characters, voice cache and VRAM behaviour | **UNKNOWN** | Requires GPU |
-| 34 | Memory / FD leaks | 1000+ job soak | **UNKNOWN** | Not run |
-| 35 | Worker crash recovery | Kill a worker mid-job; job remains recoverable | **UNKNOWN** | Not run (the sweeper covers the *dispatch* crash window only) |
-| 36 | DB / queue / storage outage | Behaviour and recovery per dependency | **PARTIAL** | `failure-injection.integration.test.ts` covers unreachable-Postgres readiness only |
-| 37 | Deletion semantics | Book / voice / artifact deletion, no orphans | **UNKNOWN** | Blocked in this environment — see Finding F-8 |
-| 44 | Schema drift gate | `pnpm schema:drift-check` passes on a clean tree | **PASS** (after fix) | Finding F-20 — all 10 checks green; previously red since written |
-| 45 | Per-attempt worker lineage | `ProcessingAttempt` rows recording which worker ran each attempt | **FAIL** | No worker writes them — zero rows after a full pipeline run. §98 requires Request → Job → **Worker** → Artifact → Event; the Worker link is absent. Not a defect in shipped behaviour but an unbuilt subsystem — see F-26 |
-| 38 | Backup / restore | Tested restore | **UNKNOWN** | No infrastructure; `deployment-architecture.md` RPO/RTO remain provisional |
-| 39 | Migration safety | Migrations against realistic data volume | **UNKNOWN** | Not run |
-| 40 | Human / subjective audio evaluation | Naturalness, differentiation, continuity | **UNKNOWN** | No protocol run |
-| 41 | Production-like boot (§163) | API starts from documented config against real Postgres/Redis/MinIO, serves authenticated traffic | **PASS** (compiled build only) | Now automated: every `pnpm test:e2e` run boots the compiled services. Originally a manual dry run, which uncovered F-11 and F-13 |
-| 42 | Error observability (§100) | An unhandled failure yields a diagnosable server-side record | **PASS** (after fix) | Finding F-12 |
-| 43 | Dev-loop startup | `pnpm start:dev` runs the API | **PASS** (after fix) | Finding F-13 — compiled dev loop; verified 401 not 500 |
+| #   | Category                               | What was checked                                                                                                            | Status                                     | Evidence                                                                                                                                                                                                                                                                                                                                                                |
+| --- | -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Text fidelity                          | Source PDF → canonical text: no loss, duplication, or corruption of words, names, numbers, dates, punctuation, or non-ASCII | **PASS**                                   | `packages/ingestion/src/golden-book.test.ts` (counts, not just presence)                                                                                                                                                                                                                                                                                                |
+| 2   | Text fidelity — hyphenation            | Line-break hyphenation rejoined within a page                                                                               | **PASS**                                   | same                                                                                                                                                                                                                                                                                                                                                                    |
+| 3   | Text fidelity — hyphenation            | Hyphenation broken across a **page** boundary                                                                               | **PASS** (after fix)                       | Finding F-1; `golden-book.test.ts` (promoted from `it.fails` once it held)                                                                                                                                                                                                                                                                                              |
+| 4   | OCR noise                              | Repeated header / bare page-number footer stripped, not narrated                                                            | **PASS**                                   | `golden-book.test.ts`, `pipeline.test.ts`                                                                                                                                                                                                                                                                                                                               |
+| 5   | Structural fidelity                    | Chapter order and titles preserved                                                                                          | **PASS**                                   | `golden-book.test.ts`                                                                                                                                                                                                                                                                                                                                                   |
+| 6   | Reproducibility (ingestion)            | Same bytes + config → same `contentHash` / `rawTextContentHash`                                                             | **PASS**                                   | `golden-book.test.ts`, `pipeline.test.ts`                                                                                                                                                                                                                                                                                                                               |
+| 7   | Tenant isolation                       | Cross-tenant reads across all 6 business services                                                                           | **PASS**                                   | `tests/integration/tenant-isolation.security.integration.test.ts`                                                                                                                                                                                                                                                                                                       |
+| 8   | IDOR                                   | ID substitution (own book id + foreign sub-resource id) for chapter, character, character-voice, aliases                    | **PASS**                                   | same                                                                                                                                                                                                                                                                                                                                                                    |
+| 9   | IDOR                                   | ID substitution for AudioScript / AudioScriptChunk / AudioChunk / ChapterAudio / Audiobook                                  | **UNKNOWN**                                | Not tested — fixtures need the full StoryBible + ModelVersion + TTS lineage chain. Book-level gate for those services _is_ covered (row 7)                                                                                                                                                                                                                              |
+| 10  | Prompt injection                       | Instruction-shaped dialogue, fake system prompts, tool-call and markup payloads cannot produce an unregistered speaker      | **PASS**                                   | `python/worker-ai/tests/test_prompt_injection_resistance.py`                                                                                                                                                                                                                                                                                                            |
+| 11  | LLM output validation                  | Provider output schema has no speaker/instruction field; smuggled extra fields rejected, not dropped                        | **PASS**                                   | same                                                                                                                                                                                                                                                                                                                                                                    |
+| 12  | Director validation                    | Unknown-speaker circuit breaker hard-fails a compromised run                                                                | **PASS**                                   | same, plus `test_director_validation.py`                                                                                                                                                                                                                                                                                                                                |
+| 13  | Job dispatch reliability               | A job committed to Postgres but never enqueued to Redis is recovered                                                        | **PASS** (after fix)                       | Finding F-2; `tests/integration/processing-job-sweeper.integration.test.ts`                                                                                                                                                                                                                                                                                             |
+| 14  | Idempotency (queue)                    | Re-enqueueing an already-queued job is a safe no-op                                                                         | **PASS**                                   | same test; BullMQ `addStandardJob` Lua jobId short-circuit                                                                                                                                                                                                                                                                                                              |
+| 15  | Idempotency (HTTP)                     | `Idempotency-Key` dedup                                                                                                     | **PASS** (pre-existing)                    | `IdempotencyKey` unique index + `idempotency.service.ts`                                                                                                                                                                                                                                                                                                                |
+| 16  | Idempotency (job records)              | DB-level uniqueness on `ProcessingJob.idempotencyKey`                                                                       | **PASS**                                   | Partial unique index verified against the live DB via `pg_indexes`. Previously reported as FAIL — see the retraction of F-3                                                                                                                                                                                                                                             |
+| 17  | Outbox / inbox                         | Transactional outbox → relay → idempotent inbox                                                                             | **PASS** (mechanism) / **FAIL** (coverage) | Finding F-4 — real business job dispatch does not use it                                                                                                                                                                                                                                                                                                                |
+| 18  | Retry / backoff / DLQ                  | Bounded retry, full-jitter backoff, dead-letter on exhaustion                                                               | **PASS**                                   | `tests/integration/queue.integration.test.ts`, `backoff.test.ts`                                                                                                                                                                                                                                                                                                        |
+| 19  | Audio validation                       | Clipping, silence, sample rate, channels, duration checks                                                                   | **PASS** (after fix)                       | Finding F-5; `python/worker-gpu/tests/test_audio.py`                                                                                                                                                                                                                                                                                                                    |
+| 20  | Assembly ordering                      | Scrambled chunk insertion still assembles in canonical order, verified from decoded audio                                   | **PASS** (pre-existing)                    | `assembly.integration.test.ts` bandpass check                                                                                                                                                                                                                                                                                                                           |
+| 21  | Packaging                              | Real ffprobe-verifiable M4B with correct chapter markers and durations                                                      | **PASS** (pre-existing)                    | `assembly.integration.test.ts`                                                                                                                                                                                                                                                                                                                                          |
+| 22  | Secret scan                            | Hard-coded credentials, hosts, ports, model paths in `apps/` and `python/`                                                  | **PASS**                                   | grep audit; only hit is a comment stating no such default exists                                                                                                                                                                                                                                                                                                        |
+| 23  | Authorization — admin content boundary | `PLATFORM_ADMIN` refused on content surfaces and signed-URL minting (§6.6 MUST NOT)                                         | **PASS** (after fix)                       | Finding F-6; `TenantRoleGuard` + `tenant-role.guard.test.ts`                                                                                                                                                                                                                                                                                                            |
+| 23a | Authorization — deny by default        | A principal with no tenant role, or a `SERVICE`/`WORKER` token, is refused on `/api/v1/**`                                  | **PASS** (after fix)                       | same                                                                                                                                                                                                                                                                                                                                                                    |
+| 24  | Rate limiting                          | Per-bucket throttling on read / write / upload / expensive / access_url                                                     | **PASS** (after fix)                       | Finding F-7; `buckets.test.ts`, `rate-limit.integration.test.ts`                                                                                                                                                                                                                                                                                                        |
+| 24a | Rate limiting — availability           | A Redis outage does not become an API outage                                                                                | **PASS**                                   | fail-open with a `degraded` signal; `rate-limit.integration.test.ts`                                                                                                                                                                                                                                                                                                    |
+| 25  | Full-pipeline E2E                      | One book, upload → final audiobook, in a single run                                                                         | **PASS**                                   | `tests/e2e/full-pipeline.e2e.test.ts` chains upload → ingestion → analysis → **casting** → Director → TTS → assembly → packaged audiobook across both runtimes over real HTTP and real queues. All 7 stages green, twice consecutively. Reaching this required F-24 (concurrent jobs dead-lettered) and F-25 (the stage-6 assertion read a field the API never returns) |
+| 25e | Casting → Director ordering            | Voices assignable before the Director, so every IR chunk carries a binding                                                  | **PASS** (after fix)                       | Finding F-22; stage 3 + stage 4's zero-unbound-chunks assertion                                                                                                                                                                                                                                                                                                         |
+| 25d | Cross-language queue interop           | Node BullMQ producer → Python BullMQ consumer on the same queues                                                            | **PASS**                                   | same test; this is `architecture-review.md`'s High-Risk #9 surface, previously untested — and it is what surfaced F-14                                                                                                                                                                                                                                                  |
+| 25a | HTTP contract E2E                      | Auth, authorization, isolation, idempotency, validation, error envelope against the running API                             | **PASS**                                   | `tests/e2e/api-http.e2e.test.ts` (15 checks) — a layer that previously had no coverage at all                                                                                                                                                                                                                                                                           |
+| 25b | Cross-process text fidelity            | Golden-fixture text survives upload → storage → worker → DB → HTTP intact                                                   | **PASS**                                   | same ingestion E2E; asserts rejoined hyphenation and stripped page headers after the full crossing                                                                                                                                                                                                                                                                      |
+| 25c | Artifact lineage                       | A produced BookVersion traces back to its job, book file, and parser/normalizer provenance                                  | **PASS**                                   | same                                                                                                                                                                                                                                                                                                                                                                    |
+| 26  | Voice consistency at scale             | Same `VoiceProfileVersion` across distant chapters                                                                          | **UNKNOWN**                                | Requires the full-pipeline harness                                                                                                                                                                                                                                                                                                                                      |
+| 27  | Speaker attribution accuracy           | Precision / recall / F1 against ground truth                                                                                | **UNKNOWN**                                | No labelled corpus exists yet                                                                                                                                                                                                                                                                                                                                           |
+| 28  | Speaker embedding similarity           | Same-voice similarity across emotions and chapters                                                                          | **UNKNOWN**                                | Requires real TTS + GPU                                                                                                                                                                                                                                                                                                                                                 |
+| 29  | Provider fallback                      | No silent provider switching under failure                                                                                  | **UNKNOWN** (code reviewed, not exercised) | `factory.py` selects one provider at startup; no runtime swap path found by inspection                                                                                                                                                                                                                                                                                  |
+| 30  | Performance baseline                   | Ingestion / Director / TTS RTF / assembly throughput                                                                        | **UNKNOWN**                                | No GPU, no production-like host. **No numbers are published.**                                                                                                                                                                                                                                                                                                          |
+| 31  | Load / concurrency                     | 1 → 50 concurrent users                                                                                                     | **UNKNOWN**                                | Not run                                                                                                                                                                                                                                                                                                                                                                 |
+| 32  | Long-form                              | 10h+ / 20h+ audiobook, 100+ chapters, 100k segments                                                                         | **UNKNOWN**                                | Not run                                                                                                                                                                                                                                                                                                                                                                 |
+| 33  | Large cast                             | 50+ characters, voice cache and VRAM behaviour                                                                              | **UNKNOWN**                                | Requires GPU                                                                                                                                                                                                                                                                                                                                                            |
+| 34  | Memory / FD leaks                      | 1000+ job soak                                                                                                              | **UNKNOWN**                                | Not run                                                                                                                                                                                                                                                                                                                                                                 |
+| 35  | Worker crash recovery                  | Kill a worker mid-job; job remains recoverable                                                                              | **UNKNOWN**                                | Not run (the sweeper covers the _dispatch_ crash window only)                                                                                                                                                                                                                                                                                                           |
+| 36  | DB / queue / storage outage            | Behaviour and recovery per dependency                                                                                       | **PARTIAL**                                | `failure-injection.integration.test.ts` covers unreachable-Postgres readiness only                                                                                                                                                                                                                                                                                      |
+| 37  | Deletion semantics                     | Book / voice / artifact deletion, no orphans                                                                                | **UNKNOWN**                                | Blocked in this environment — see Finding F-8                                                                                                                                                                                                                                                                                                                           |
+| 44  | Schema drift gate                      | `pnpm schema:drift-check` passes on a clean tree                                                                            | **PASS** (after fix)                       | Finding F-20 — all 10 checks green; previously red since written                                                                                                                                                                                                                                                                                                        |
+| 45  | Per-attempt worker lineage             | `ProcessingAttempt` rows recording which worker ran each attempt                                                            | **FAIL**                                   | No worker writes them — zero rows after a full pipeline run. §98 requires Request → Job → **Worker** → Artifact → Event; the Worker link is absent. Not a defect in shipped behaviour but an unbuilt subsystem — see F-26                                                                                                                                               |
+| 38  | Backup / restore                       | Tested restore                                                                                                              | **UNKNOWN**                                | No infrastructure; `deployment-architecture.md` RPO/RTO remain provisional                                                                                                                                                                                                                                                                                              |
+| 39  | Migration safety                       | Migrations against realistic data volume                                                                                    | **UNKNOWN**                                | Not run                                                                                                                                                                                                                                                                                                                                                                 |
+| 40  | Human / subjective audio evaluation    | Naturalness, differentiation, continuity                                                                                    | **UNKNOWN**                                | No protocol run                                                                                                                                                                                                                                                                                                                                                         |
+| 41  | Production-like boot (§163)            | API starts from documented config against real Postgres/Redis/MinIO, serves authenticated traffic                           | **PASS** (compiled build only)             | Now automated: every `pnpm test:e2e` run boots the compiled services. Originally a manual dry run, which uncovered F-11 and F-13                                                                                                                                                                                                                                        |
+| 42  | Error observability (§100)             | An unhandled failure yields a diagnosable server-side record                                                                | **PASS** (after fix)                       | Finding F-12                                                                                                                                                                                                                                                                                                                                                            |
+| 43  | Dev-loop startup                       | `pnpm start:dev` runs the API                                                                                               | **PASS** (after fix)                       | Finding F-13 — compiled dev loop; verified 401 not 500                                                                                                                                                                                                                                                                                                                  |
 
 **Test suite totals as measured:** 228 TypeScript unit tests, all passing;
 43 integration tests across 9 files, all passing; 24 end-to-end tests across 3
@@ -87,15 +94,16 @@ consecutive runs; 301 Python tests, **300 passing, 1 skipped, 0 failing**
 ## 2. Findings
 
 ### F-1 — Cross-page hyphenation split a word across paragraphs (fixed)
+
 Dehyphenation runs inside a single block's text, so a word broken by a **page**
 break was never rejoined: the canonical text kept a dangling hyphen at the end
 of one paragraph and resumed mid-word in the next ("…an extra-" / "ordinary
 afternoon…"). TTS would narrate that as two broken words, and the paragraph no
 longer matched its source sentence.
 
-*(An earlier revision of this finding described the symptom as the string
+_(An earlier revision of this finding described the symptom as the string
 "extra- ordinary" in canonical text. That was an artifact of the probe joining
-paragraphs with a space; the real defect is the paragraph split above.)*
+paragraphs with a space; the real defect is the paragraph split above.)_
 
 **Fixed** in `detect-structure.ts` by merging the two blocks, on the same
 conservative evidence `dehyphenate` already uses — previous block ends with a
@@ -110,14 +118,15 @@ changes canonical text and therefore every downstream content hash. Historical
 
 **The bump has a ripple worth knowing about.** Ingestion refuses to persist
 without a registered `ModelVersion` for the normalizer identity it reports, so
-the version change immediately broke every ingestion with *"No ModelVersion
-normalize.v2 registered … Run the seed script"* — in tests and, had it shipped
+the version change immediately broke every ingestion with _"No ModelVersion
+normalize.v2 registered … Run the seed script"_ — in tests and, had it shipped
 unnoticed, in any deployed environment too. `infra/scripts/seed.ts` and the
 test fixtures were updated in step. **Any future `normalizationVersion` (or
 parser/OCR version) change must update the seed script in the same commit**;
 the no-provenance-no-write rule turns a version bump into a deployment step.
 
 ### F-2 — Jobs orphaned between commit and enqueue (fixed)
+
 Every API service committed a `ProcessingJob` row and then, in a separate
 non-transactional step, called `queueManager.enqueue(...)`. A crash or Redis
 outage between the two left the row at `status=CREATED` forever with nothing to
@@ -139,12 +148,13 @@ service's business logic inside the sweeper. **Recommended follow-up:** persist
 the intended envelope as a `ProcessingJob.enqueuePayload` column at creation
 time, then the sweeper generalizes to every job type.
 
-### F-3 — RETRACTED: `ProcessingJob` idempotency *is* DB-enforced
+### F-3 — RETRACTED: `ProcessingJob` idempotency _is_ DB-enforced
+
 **This finding was wrong and is withdrawn.** It claimed
 `ProcessingJob.idempotencyKey` carried no unique constraint and that
 duplicate-job prevention rested on application code alone. It does not.
 
-The constraint exists, is a *partial* unique index, and matches
+The constraint exists, is a _partial_ unique index, and matches
 `database-schema.md` §21's description precisely — verified against the live
 database, not just the migration:
 
@@ -156,7 +166,7 @@ CREATE UNIQUE INDEX processing_job_tenant_idempotency_key
 
 **Why I got it wrong, and the lesson:** I inferred it from the Prisma schema's
 `@@index`/`@@unique` block, which shows no unique constraint on those columns.
-Prisma cannot express a *partial* unique index, so this one is hand-written in
+Prisma cannot express a _partial_ unique index, so this one is hand-written in
 `prisma/migrations/0001_init/migration.sql` (line 3097) — exactly the situation
 `prisma/README.md` exists to describe. **The Prisma schema is not the authority
 on this database's constraints; the migration is.** Any future audit of
@@ -174,16 +184,16 @@ the fix.** It was filed as "job dispatch bypasses the outbox", with "route
 dispatch through the outbox" named as the architecturally-aligned fix. Reading
 `event-contracts.md` §3.1-3.2 before implementing that showed the opposite:
 
-| | Command | Event |
-| --- | --- | --- |
-| Means | *"Please perform this operation."* | *"This operation has happened."* |
-| Consumers | **Exactly one** | Zero or more |
-| Persisted as | A `processing_job` row | An `outbox_message` row, then a broadcast |
+|              | Command                            | Event                                     |
+| ------------ | ---------------------------------- | ----------------------------------------- |
+| Means        | _"Please perform this operation."_ | _"This operation has happened."_          |
+| Consumers    | **Exactly one**                    | Zero or more                              |
+| Persisted as | A `processing_job` row             | An `outbox_message` row, then a broadcast |
 
 Dispatching a command through the outbox would turn a command into an event —
 precisely the conflation those sections exist to forbid. Dispatch bypassing the
 outbox is **correct**, and the proposed fix would have been architectural drift
-(§4) justified by a misreading. The `processing_job` row already *is* the
+(§4) justified by a misreading. The `processing_job` row already _is_ the
 durable record of the command.
 
 The second half of the original claim was also wrong: real business events
@@ -214,7 +224,7 @@ this build does not recognise is logged and left, rather than cast.
 
 **Regression tests** (`processing-job-sweeper.integration.test.ts`, 4 passing):
 the original `parse_book` recovery and dedup cases, plus an `assemble_chapter`
-job recovered generically (asserting it lands on the queue the *row* names,
+job recovered generically (asserting it lands on the queue the _row_ names,
 with the row's own payload) and a NULL-envelope row left untouched with
 `queued_at` still NULL.
 
@@ -225,6 +235,7 @@ the test imports the sweeper through the package export, which resolves to
 error as F-24's stale container: the code under test was not the code on disk.
 
 ### F-5 — Audio clipping test asserted the wrong property (fixed)
+
 `test_full_scale_amplitude_is_flagged_as_clipping` expected >50% of samples at
 full scale from a full-scale **sine**, which only reaches full scale at each
 cycle peak (~2.8%). The detector was correct; the assertion was not. Rewritten
@@ -232,9 +243,10 @@ to assert what actually matters — the ratio clears the rejection threshold and
 `run_worker_checks` fails on `true_peak_clipping`.
 
 ### F-6 — The administrator content boundary was unenforced (fixed)
+
 **This finding was originally recorded as "no RBAC" — that framing was wrong,
 and reading §6.5 closely corrected it.** The spec deliberately gives
-`TENANT_OWNER` and `TENANT_MEMBER` *equal* access to their tenant's books,
+`TENANT_OWNER` and `TENANT_MEMBER` _equal_ access to their tenant's books,
 files, jobs, voices, and artifacts ("all `TENANT_MEMBER` principals have equal
 access", §6.2), so the absence of an owner-vs-member distinction is the spec,
 not a defect.
@@ -256,7 +268,7 @@ caller's own tenant, so hiding its existence would be confusing rather than
 safer. Cross-tenant references remain `404` (row 7).
 
 **Two judgment calls, flagged for review rather than buried.** (a) The admin
-refusal applies whenever `PLATFORM_ADMIN` is present, *even alongside* a tenant
+refusal applies whenever `PLATFORM_ADMIN` is present, _even alongside_ a tenant
 role, because a boundary that can be stepped over by adding a second role to
 the same token is advisory rather than enforced. If product intent is that one
 human may hold both roles and use their own tenant normally, that is the single
@@ -266,6 +278,7 @@ means, and there are no login endpoints in this codebase to migrate, but any
 external issuer must now emit `TENANT_OWNER` or `TENANT_MEMBER`.
 
 ### F-7 — No rate limiting (fixed)
+
 `api-specification.md` §14.3 specifies seven buckets. `QuotaExceededError`
 (code `RATE_LIMITED`) existed in `packages/errors` and was referenced nowhere
 else; no guard, interceptor, or middleware implemented throttling — including
@@ -278,7 +291,7 @@ business controllers, with `RateLimit-Limit/Remaining/Reset` headers and
 
 Design choices worth review: buckets are derived from method and path rather
 than from a per-route decorator, because a decorator someone forgets to add
-leaves that route *unlimited* — the one failure mode a limiter must not have.
+leaves that route _unlimited_ — the one failure mode a limiter must not have.
 Limits are counted per user, per tenant, and per IP simultaneously (§14.3
 requires all three); the per-tenant multiplier exists so a multi-seat tenant is
 not held to one user's budget. **The numeric limits are unmeasured starting
@@ -309,7 +322,7 @@ deletion semantics could not be exercised.
 
 Note the drift check reports "required extensions installed" as PASS here: it
 queries `pg_extension`, which is satisfied by the catalog row alone. It cannot
-distinguish a registered extension from a *loadable* one.
+distinguish a registered extension from a _loadable_ one.
 
 **Fix.** `docker-compose.yml` now pins `pgvector/pgvector:pg16` (same PG major,
 so the on-disk format is unchanged). Verified on a throwaway container rather
@@ -334,10 +347,11 @@ to execute: `all characters are PROVISIONAL`. That predates F-22, which made
 analysis create the NARRATOR/UNKNOWN sentinels (status `CONFIRMED`,
 `is_sentinel = true`) so the narrator is castable before the Director runs. The
 assertion now scopes to non-sentinel characters — preserving its real intent,
-that *discovered* characters are claims and must never be auto-confirmed — and
+that _discovered_ characters are claims and must never be auto-confirmed — and
 additionally asserts the sentinels exist and are CONFIRMED, pinning F-22.
 
 ### F-9 — `final-integration.test.ts` is order/state dependent (pre-existing)
+
 Passes on a freshly obliterated `maintenance` queue, then fails on the next run
 with `Record to update not found`, because the test leaves BullMQ entries in
 Redis that its Postgres-only cleanup never removes. **Confirmed pre-existing:**
@@ -346,8 +360,9 @@ outside this milestone's scope, and the fix (queue cleanup in `afterAll`)
 belongs with whoever owns that test.
 
 ### F-11 — An empty `AUTH_JWT_JWKS_URL` made the API unstartable (fixed)
+
 The cross-field auth check used `??`: `Boolean(v.AUTH_JWT_JWKS_URL ?? v.AUTH_JWT_PUBLIC_KEY)`.
-An empty string is not nullish, so a *present-but-empty* `AUTH_JWT_JWKS_URL`
+An empty string is not nullish, so a _present-but-empty_ `AUTH_JWT_JWKS_URL`
 short-circuited and the public key was never considered. `.env.example` ships
 exactly that (`AUTH_JWT_JWKS_URL=`), so **an operator following the documented
 setup and supplying a public key could not start the API at all** — it failed
@@ -359,6 +374,7 @@ were, in effect, set. Found by attempting a production-like boot (§163).
 `packages/config/src/index.test.ts`.
 
 ### F-12 — Unhandled 500s were undiagnosable (fixed)
+
 `logError` recorded only `error_code` — and for any error without a taxonomy
 code that is the literal string `UNKNOWN_ERROR`, with the message, class, and
 stack all discarded. A production 500 therefore left nothing to debug from,
@@ -375,6 +391,7 @@ This fix immediately proved itself: it is what identified F-13 below, which had
 previously surfaced only as an opaque `INTERNAL_ERROR`.
 
 ### F-13 — `pnpm start:dev` could not run the API (fixed)
+
 The README's documented local-dev command for the API is `start:dev`, which
 runs `tsx watch src/main.ts`. tsx/esbuild does not implement TypeScript's
 `emitDecoratorMetadata`, so NestJS gets no `design:paramtypes` and every
@@ -396,6 +413,7 @@ running API over HTTP. `tests/e2e/api-http.e2e.test.ts` now does, and carries an
 explicit regression test for this signature.
 
 ### F-14 — Director generation failed 100% of the time (fixed) — **the most serious defect found so far**
+
 Every `generate_director_ir` job failed against a real database:
 
 ```
@@ -404,13 +422,13 @@ of relation "audio_script_chunk_source" violates not-null constraint
 ```
 
 `updated_at` is `NOT NULL` with **no database default**, because Prisma's
-`@updatedAt` is maintained by the Prisma *client* — so the generated DDL
+`@updatedAt` is maintained by the Prisma _client_ — so the generated DDL
 carries no `DEFAULT`, and every writer outside Prisma must supply the column
 itself. `worker-ai` writes through SQLAlchemy, and its INSERT into
 `audio_script_chunk_source` omitted it.
 
 **Blast radius, measured rather than assumed:** of the 17 tables the Python
-workers INSERT into, this was the *only* offending statement — the sibling
+workers INSERT into, this was the _only_ offending statement — the sibling
 INSERT into `audio_script_chunk` three lines above already passes `:now, :now`,
 and all other writers supply it correctly. One inconsistent statement.
 
@@ -429,17 +447,19 @@ entry moves from a predicted risk to a demonstrated one.
 matching the convention every other writer already follows.
 
 **Two follow-ups this exposes, both still open:**
-1. *A failing Director job never reaches a terminal state.* Through every
+
+1. _A failing Director job never reaches a terminal state._ Through every
    retry the `ProcessingJob` stayed `RUNNING` with `errorCode` NULL, and each
    attempt left another orphan `DRAFT` `AudioScript` behind. A permanently
    failing job should end `FAILED` with its error recorded — as the ingestion
    path does — and should not accumulate orphan rows. Related to F-3.
-2. *The class of bug is not closed, only this instance.* Any future non-Prisma
+2. _The class of bug is not closed, only this instance._ Any future non-Prisma
    INSERT can reintroduce it. A cheap guard: a schema test asserting that
    every `updated_at` column either has a DB default or is written by a
    statement that sets it. `pnpm schema:drift-check` is the natural home.
 
 ### F-15 — TTS was unreachable for every book (fixed)
+
 `TtsService.startTts` gates on `book.current_audio_script_id`, and a repo-wide
 search found that column **read in exactly two places and written in none**.
 The Director's `finalize_audio_script` marks the script `VALIDATED`/`is_current`,
@@ -457,6 +477,7 @@ ever reached the TTS gate to discover the problem.
 script current.
 
 ### F-16 — `book.current_audiobook_id` is never written (open, dormant)
+
 The same "current pointer" convention is unimplemented for audiobooks: nothing
 writes the column, and the assembly API derives its `current_audiobook_id`
 response field from the `Audiobook` table instead. Unlike F-15 nothing gates on
@@ -465,6 +486,7 @@ call — populate it for consistency, or drop it — so it is recorded rather th
 fixed.
 
 ### F-17 — A missing optional field yields 500, not 422 (open)
+
 `POST /voice-profiles/:id/versions/:v/previews` with no `book_id` returns
 `500 INTERNAL_ERROR`. `create-voice-preview.schema.json` marks `book_id`
 optional, but the database requires it for this path:
@@ -487,7 +509,8 @@ Worth noting the class: any endpoint that creates a `ProcessingJob` without a
 `book_id` hits the same constraint. This is the only one this suite exercised.
 
 ### F-19 — worker-gpu writes `resource_type` values that do not exist (open, blocking)
-Voice preview generation fails 100% of the time, *after* successfully
+
+Voice preview generation fails 100% of the time, _after_ successfully
 rendering and uploading the audio:
 
 ```
@@ -499,11 +522,11 @@ InvalidTextRepresentationError: invalid input value for enum resource_type: "voi
 `resource_type` enum — verified against the live database via `pg_enum`, not
 just the schema file:
 
-| written by | value | in enum? |
-|---|---|---|
-| `generate_voice_preview.py:55` and `:138` | `voice_preview` | **no** |
-| `generate_tts_chunk.py:74` | `tts_job` | **no** |
-| `generate_tts_chunk.py:98,216` | `audio_chunk` | yes |
+| written by                                | value           | in enum? |
+| ----------------------------------------- | --------------- | -------- |
+| `generate_voice_preview.py:55` and `:138` | `voice_preview` | **no**   |
+| `generate_tts_chunk.py:74`                | `tts_job`       | **no**   |
+| `generate_tts_chunk.py:98,216`            | `audio_chunk`   | yes      |
 
 So preview generation is dead on both of its success paths, and TTS chunk
 generation has the **same latent failure** on its already-terminal/redelivery
@@ -515,7 +538,7 @@ fails only on retry, exactly when things are already going wrong.
 fixed.** `database-schema.md` §2699 lists the enum exactly as implemented, so
 the migration is faithful to the documented contract and it is the workers that
 step outside it. But `VoicePreview` and `TtsJob` are real tables, and a job
-whose *result* is one of them has no way to say so. Two defensible resolutions:
+whose _result_ is one of them has no way to say so. Two defensible resolutions:
 
 1. **Extend the vocabulary** — add `voice_preview` and `tts_job` to the enum
    (an additive `ALTER TYPE ... ADD VALUE` migration) and update
@@ -530,6 +553,7 @@ until this is decided**, which is why it is flagged as blocking rather than
 filed for later.
 
 ### F-20 — `pnpm schema:drift-check` is red on a clean tree (pre-existing)
+
 The repo's own schema-drift gate fails its `base table count matches
 schema.prisma (59 models…)` assertion. **Confirmed pre-existing** by stashing
 every Phase 7 change and re-running — it fails identically. Every other check in
@@ -544,22 +568,23 @@ actually contains versus what `schema.prisma` says — this check is worth
 getting green.
 
 ### F-21 — Nine endpoints returned 201 where the spec requires 200 (fixed)
+
 F-18 turned out to be one instance of a systemic problem. A scan of every
 `@Post`/`@Put` handler found eleven that set no status at all, so NestJS's
 `@Post` default (`201 Created`) was sent regardless of what the endpoint
 actually does. Nine of them are specified as `200`, and `201` is not among
 their documented status codes:
 
-| endpoint | spec |
-|---|---|
-| `POST .../text/access-urls`, `.../audio-chunks/:id/access-urls`, `.../chapter-audio/:id/access-urls`, `.../audiobooks/:id/access-urls` | §16.20 — `200` |
-| `POST .../versions/:v/approval` | `200` with the updated version |
-| `POST .../versions/:v/lock`, `.../retirement` | `200` |
-| `PUT .../characters/:id/voice` | `200` |
-| `POST .../casting/narrator-fallback` | `200` with the updated casting state |
+| endpoint                                                                                                                               | spec                                 |
+| -------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------ |
+| `POST .../text/access-urls`, `.../audio-chunks/:id/access-urls`, `.../chapter-audio/:id/access-urls`, `.../audiobooks/:id/access-urls` | §16.20 — `200`                       |
+| `POST .../versions/:v/approval`                                                                                                        | `200` with the updated version       |
+| `POST .../versions/:v/lock`, `.../retirement`                                                                                          | `200`                                |
+| `PUT .../characters/:id/voice`                                                                                                         | `200`                                |
+| `POST .../casting/narrator-fallback`                                                                                                   | `200` with the updated casting state |
 
 None of these creates a resource. Access-URL minting in particular returns a
-short-lived credential for an *existing* object, and `201` implies a new
+short-lived credential for an _existing_ object, and `201` implies a new
 resource at a new location — the opposite of what §16.20 describes.
 
 **Fixed** with `@HttpCode(200)` on all nine. The two remaining defaults
@@ -568,7 +593,7 @@ correct there and they were deliberately left alone.
 
 Worth noting how this class hides: a wrong-but-successful status is invisible
 to any test that only asserts the response body, and every one of these
-endpoints *worked* — they just announced the wrong thing. It took an E2E test
+endpoints _worked_ — they just announced the wrong thing. It took an E2E test
 asserting the documented status code to surface it.
 
 ### F-24 — Concurrent jobs dead-lettered by a per-process health state machine (FIXED)
@@ -589,7 +614,7 @@ stale code wrote `GENERATED`, the new code wrote `VALIDATED`, and each run's
 chunks were split between them at random.
 
 This also explains the observation previously recorded here as an unresolvable
-paradox. `assertNoStaleWorkers()` shells out to `ps`, which sees only *host*
+paradox. `assertNoStaleWorkers()` shells out to `ps`, which sees only _host_
 processes — a container is invisible to it **in principle**, not by accident.
 The guard could never have caught this, and its silence was read as evidence of
 absence. `assertNoWorkerContainers()` now closes that gap, failing loudly when
@@ -605,7 +630,7 @@ failedReason: "Cannot transition from PROCESSING to PROCESSING"
   at worker-cpu/dist/main.js:112
 ```
 
-`PROCESSING`/`IDLE` describe the *process*, but each job called `transition()`
+`PROCESSING`/`IDLE` describe the _process_, but each job called `transition()`
 directly. A worker runs `concurrency` jobs at once, so the second overlapping
 job threw **out of the BullMQ process function, before any handler logic ran**.
 The job failed, retried into the same collision, and dead-lettered — while its
@@ -637,31 +662,33 @@ during DRAINING; and the count never goes negative.
 
 **Method note, recorded because it cost the most.** Five separate measurement
 instruments produced confident wrong answers here: a poll treating an empty set
-as complete, log *tails* counted as totals, a process guard blind to containers,
+as complete, log _tails_ counted as totals, a process guard blind to containers,
 and — the one that did the most damage — comparing a PID stamp taken in one run
-against a `ps` sample taken in a *different* run, then reporting the mismatch as
+against a `ps` sample taken in a _different_ run, then reporting the mismatch as
 an impossible fact. When evidence looks impossible, the instrument is the first
 suspect, not the system. The measurements that actually resolved this were the
-*full* worker log on disk (5 completions against 12 chunks, which pointed
+_full_ worker log on disk (5 completions against 12 chunks, which pointed
 outside the harness) and the BullMQ job hash in Redis (which named the throw).
 
 **A caution for whoever picks this up.** Most of the time spent on this went to
 faulty measurement, not to the defect: a poll that treated an empty set as
-"complete", log *tails* counted as totals, assertions that discarded the logs
+"complete", log _tails_ counted as totals, assertions that discarded the logs
 explaining them, and a stale-process guard that matched the observer's own
 command line. Trust an instrument here only after checking it reports correctly
 on a known input.
 
 ### F-10 — Four stale Phase-1 guard tests (pre-existing)
+
 `python/workers-common/tests/test_runtime_lifecycle.py` still asserts that
 Phase 4/5 features do not exist: `generate_director_ir` "must not exist yet",
 `StubTTSProvider` should be importable, model id should be `stub-model-v0`.
 Those phases have shipped, so the suite has been red since Phase 4 landed.
-These need updating to assert current reality; what each guard *should* now
+These need updating to assert current reality; what each guard _should_ now
 assert is a call for whoever owns the phase boundaries, so they are reported
 rather than rewritten here.
 
 ### F-25 — The stage-6 E2E assertion read a field the API never returns (FIXED)
+
 `full-pipeline.e2e.test.ts` polled `/books/:id/audiobook` for
 `status === 'READY'`. That endpoint returns an `audiobook_project`, whose
 lifecycle field is `generation_status`
@@ -679,6 +706,7 @@ follows `current_audiobook_id` to assert `READY` and a positive duration on the
 audiobook itself — preserving the original intent against the real contract.
 
 ### F-26 — Worker identity and per-attempt lineage are unimplemented (OPEN, not started)
+
 `processing_attempt` and `worker` have **no writer in either runtime** — zero
 rows after a full pipeline run. §98's lineage chain Request → Job → **Worker** →
 Artifact → Event is missing its Worker link, so "which worker produced this
@@ -713,43 +741,43 @@ reported as such, never quietly downgraded.
 Re-verification of `architecture-review.md` (spec §117). Nothing is marked
 resolved on the strength of documentation alone.
 
-| Item | Original claim | Verified status |
-|---|---|---|
-| BLOCKER-1 | Outbox/Inbox tables missing from schema | **RESOLVED** — `outbox_message` and `event_inbox` exist in `prisma/schema.prisma` with working implementations, and real business events from both runtimes are written through the outbox. Job *dispatch* correctly does not use it: a command is a `processing_job` row, not an event (`event-contracts.md` §3.1) — see F-4, where this scorecard's earlier claim to the contrary is corrected |
-| BLOCKER-2 | `deployment-architecture.md` missing | **RESOLVED** — document exists |
-| High-risk 1 | Confident-but-wrong speaker attribution not automatically caught | **OPEN** — unchanged; no ground-truth corpus (row 27) |
-| High-risk 2 | Sequential narrative analysis is a throughput ceiling | **UNKNOWN** — unbenchmarked |
-| High-risk 3 | Voice consistency across a 20h audiobook | **UNKNOWN** — row 26 |
-| High-risk 4 | GPU scheduling under load | **UNKNOWN** — no GPU |
-| High-risk 5 | Queue fan-out/fan-in at 10k+ chunks | **UNKNOWN** — not load tested |
-| High-risk 6 | Text integrity under adversarial input | **PARTIALLY MITIGATED** — golden fixture + injection suite now cover it; F-1 is one measured gap |
-| High-risk 7 | Provider capability degradation UX | **OPEN** — `capability.py` negotiation is unit-tested; the human review surface is not |
-| High-risk 9 | TS/Python contract drift, "highest-probability long-term defect source" | **CONFIRMED — five separate instances, and the prediction now looks understated.** F-14 is the severe case: a Prisma-managed `@updatedAt` convention, invisible from Python, broke Director generation completely. F-15 and F-19 are the same shape. F-24 is the newest and most expensive: `WorkerHealthStateMachine` was driven per-job in TypeScript while Python's `workers_common/health.py` already reference-counted in-flight jobs with an identical DRAINING guard — the runtimes had **diverging implementations of the same contract**, and the TypeScript side dead-lettered any two overlapping jobs. F-10 and the uppercase/lowercase `LOG_LEVEL` split are milder instances. At five confirmed cases this is better treated as a systemic gap (no mechanism enforces cross-runtime contracts) than as a list of individual bugs. Partially mitigated: the cross-language path now has a full E2E test (row 25); the *class* of drift is still unguarded |
-| High-risk 10 / OQ-DIR-3 | Advisory-only review gate | **OPEN** — unchanged, still advisory |
-| Assumption 1 | Postgres HA/backup posture | **UNKNOWN** — rows 38-39; RPO/RTO still provisional |
-| Assumption 4 | TTS models fit realistic VRAM | **UNKNOWN** — unbenchmarked |
-| Assumption 7 | LLM structured-output reliability within 2-3 attempts | **UNKNOWN** — unbenchmarked |
-| OQ-EV-2 / E-8 | Generic `job.succeeded` event | **OPEN** — still absent, as carried forward |
+| Item                    | Original claim                                                          | Verified status                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| ----------------------- | ----------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| BLOCKER-1               | Outbox/Inbox tables missing from schema                                 | **RESOLVED** — `outbox_message` and `event_inbox` exist in `prisma/schema.prisma` with working implementations, and real business events from both runtimes are written through the outbox. Job _dispatch_ correctly does not use it: a command is a `processing_job` row, not an event (`event-contracts.md` §3.1) — see F-4, where this scorecard's earlier claim to the contrary is corrected                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| BLOCKER-2               | `deployment-architecture.md` missing                                    | **RESOLVED** — document exists                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| High-risk 1             | Confident-but-wrong speaker attribution not automatically caught        | **OPEN** — unchanged; no ground-truth corpus (row 27)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| High-risk 2             | Sequential narrative analysis is a throughput ceiling                   | **UNKNOWN** — unbenchmarked                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| High-risk 3             | Voice consistency across a 20h audiobook                                | **UNKNOWN** — row 26                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| High-risk 4             | GPU scheduling under load                                               | **UNKNOWN** — no GPU                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| High-risk 5             | Queue fan-out/fan-in at 10k+ chunks                                     | **UNKNOWN** — not load tested                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| High-risk 6             | Text integrity under adversarial input                                  | **PARTIALLY MITIGATED** — golden fixture + injection suite now cover it; F-1 is one measured gap                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| High-risk 7             | Provider capability degradation UX                                      | **OPEN** — `capability.py` negotiation is unit-tested; the human review surface is not                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| High-risk 9             | TS/Python contract drift, "highest-probability long-term defect source" | **CONFIRMED — five separate instances, and the prediction now looks understated.** F-14 is the severe case: a Prisma-managed `@updatedAt` convention, invisible from Python, broke Director generation completely. F-15 and F-19 are the same shape. F-24 is the newest and most expensive: `WorkerHealthStateMachine` was driven per-job in TypeScript while Python's `workers_common/health.py` already reference-counted in-flight jobs with an identical DRAINING guard — the runtimes had **diverging implementations of the same contract**, and the TypeScript side dead-lettered any two overlapping jobs. F-10 and the uppercase/lowercase `LOG_LEVEL` split are milder instances. At five confirmed cases this is better treated as a systemic gap (no mechanism enforces cross-runtime contracts) than as a list of individual bugs. Partially mitigated: the cross-language path now has a full E2E test (row 25); the _class_ of drift is still unguarded |
+| High-risk 10 / OQ-DIR-3 | Advisory-only review gate                                               | **OPEN** — unchanged, still advisory                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| Assumption 1            | Postgres HA/backup posture                                              | **UNKNOWN** — rows 38-39; RPO/RTO still provisional                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| Assumption 4            | TTS models fit realistic VRAM                                           | **UNKNOWN** — unbenchmarked                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| Assumption 7            | LLM structured-output reliability within 2-3 attempts                   | **UNKNOWN** — unbenchmarked                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| OQ-EV-2 / E-8           | Generic `job.succeeded` event                                           | **OPEN** — still absent, as carried forward                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 
 ---
 
 ## 4. Readiness gate
 
-| Dimension | Verdict | Basis |
-|---|---|---|
-| Functional correctness | **READY WITH CONDITIONS** | Upload → parsed chapters is now proven end to end across processes (row 25); the analysis → Director → TTS → assembly chain is still only covered stage by stage |
-| Text fidelity | **READY WITH CONDITIONS** | Gate passes; F-1 is a known, bounded corruption |
-| Security — tenant isolation | **READY** | Measured across all six services, both attack shapes |
-| Security — authorization | **READY WITH CONDITIONS** | F-6 and F-7 fixed and tested; rate-limit numbers are unmeasured defaults, and the admin+tenant-role interpretation needs product confirmation |
-| Audio quality | **UNKNOWN** | No real-model output has been evaluated, objectively or subjectively |
-| Scalability | **UNKNOWN** | Nothing load tested; no performance numbers exist and none are published |
-| Reliability | **READY WITH CONDITIONS** | Retry/backoff/DLQ and the dispatch window are covered; crash and outage recovery are not (rows 35-36) |
-| Observability | **READY WITH CONDITIONS** | Error diagnostics fixed (F-12); metrics, tracing, dashboards, and alerting are still unaudited |
-| Deployability | **READY WITH CONDITIONS** | The compiled build boots and serves authenticated traffic against real dependencies (row 41); the documented dev command does not (F-13), and `.env.example` produced an unstartable config until F-11 |
-| Recoverability | **NOT READY** | No tested backup or restore (row 38) |
+| Dimension                   | Verdict                   | Basis                                                                                                                                                                                                  |
+| --------------------------- | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Functional correctness      | **READY WITH CONDITIONS** | Upload → parsed chapters is now proven end to end across processes (row 25); the analysis → Director → TTS → assembly chain is still only covered stage by stage                                       |
+| Text fidelity               | **READY WITH CONDITIONS** | Gate passes; F-1 is a known, bounded corruption                                                                                                                                                        |
+| Security — tenant isolation | **READY**                 | Measured across all six services, both attack shapes                                                                                                                                                   |
+| Security — authorization    | **READY WITH CONDITIONS** | F-6 and F-7 fixed and tested; rate-limit numbers are unmeasured defaults, and the admin+tenant-role interpretation needs product confirmation                                                          |
+| Audio quality               | **UNKNOWN**               | No real-model output has been evaluated, objectively or subjectively                                                                                                                                   |
+| Scalability                 | **UNKNOWN**               | Nothing load tested; no performance numbers exist and none are published                                                                                                                               |
+| Reliability                 | **READY WITH CONDITIONS** | Retry/backoff/DLQ and the dispatch window are covered; crash and outage recovery are not (rows 35-36)                                                                                                  |
+| Observability               | **READY WITH CONDITIONS** | Error diagnostics fixed (F-12); metrics, tracing, dashboards, and alerting are still unaudited                                                                                                         |
+| Deployability               | **READY WITH CONDITIONS** | The compiled build boots and serves authenticated traffic against real dependencies (row 41); the documented dev command does not (F-13), and `.env.example` produced an unstartable config until F-11 |
+| Recoverability              | **NOT READY**             | No tested backup or restore (row 38)                                                                                                                                                                   |
 
 **Overall: NOT READY for production**, now driven by recoverability (no tested
 backup or restore) and the complete absence of measured performance and audio
 quality data. Authorization moved off the blocking list once F-6 and F-7 were
-fixed. This is a statement about what has been *measured*, not a claim that the
+fixed. This is a statement about what has been _measured_, not a claim that the
 untested areas are broken.

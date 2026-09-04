@@ -1,0 +1,13 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Register",
+  "description": "POST /api/v1/auth/register — api-specification.md §16.1.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["email", "password"],
+  "properties": {
+    "email": { "type": "string", "format": "email", "maxLength": 320 },
+    "password": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "display_name": { "type": ["string", "null"], "minLength": 1, "maxLength": 256 }
+  }
+}

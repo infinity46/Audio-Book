@@ -2,7 +2,7 @@ import { buildWorkerConfig } from '@audio-book/config';
 import { createPrismaClient, disconnectPrisma, pingDatabase } from '@audio-book/database';
 import { createLogger, logError, runWithCorrelation } from '@audio-book/logging';
 import { WorkerHealthStateMachine } from '@audio-book/observability';
-import { QueueManager, type QueueJobEnvelope } from '@audio-book/queue';
+import { QueueManager, RedisCancellationFlags, type QueueJobEnvelope } from '@audio-book/queue';
 import { S3StorageProvider } from '@audio-book/storage';
 import {
   TesseractOcrProvider,
@@ -12,9 +12,15 @@ import {
   type OCRProvider,
 } from '@audio-book/ingestion';
 import { Redis } from 'ioredis';
+import { haltIfCancelled } from './cancellation-gate.js';
 import { startHealthServer } from './health-server.js';
 import { ProcessingJobSweeper } from './processing-job-sweeper.js';
-import { processMaintenanceJob, type MaintenanceEventPayload } from './processors/maintenance.js';
+import { RetentionSweeper } from './retention-sweeper.js';
+import {
+  processMaintenanceJob,
+  type MaintenanceCommandPayload,
+  type MaintenanceEventPayload,
+} from './processors/maintenance.js';
 import { processIngestionJob, type ParseBookCommandPayload } from './processors/ingestion.js';
 import {
   processAssembleAudiobookJob,
@@ -53,6 +59,12 @@ async function main(): Promise<void> {
   const redis = new Redis(config.secrets.redisUrl, { maxRetriesPerRequest: 3 });
   const storage = new S3StorageProvider(config.secrets.storage);
   const queueManager = new QueueManager({ redisUrl: config.secrets.redisUrl });
+  // The read side of cooperative cancellation (event-contracts.md §29). The
+  // Redis flag is the fast path; `processing_job.cancellation_requested` is
+  // the durable truth the gate falls back to when Redis is unreachable, so a
+  // broker outage delays cancellation rather than disabling it.
+  const cancellationFlags = new RedisCancellationFlags(redis);
+  const cancellationGate = { prisma, flags: cancellationFlags, logger };
   const processingJobSweeper = new ProcessingJobSweeper({
     prisma,
     queueManager,
@@ -61,6 +73,17 @@ async function main(): Promise<void> {
     batchSize: 50,
     staleAfterMs: 30_000,
     onError: (err) => logError(logger, err, 'ProcessingJobSweeper poll failed'),
+  });
+  const retentionSweeper = new RetentionSweeper({
+    prisma,
+    storage,
+    logger,
+    config: {
+      orphanArtifactTtlHours: config.retention.orphanArtifactTtlHours,
+      softDeleteDays: config.retention.softDeleteDays,
+    },
+    intervalMs: config.retention.sweepIntervalMs,
+    onError: (err) => logError(logger, err, 'RetentionSweeper run failed'),
   });
   const ingestionConfig: IngestionConfig = {
     ...defaultIngestionConfig(),
@@ -96,19 +119,20 @@ async function main(): Promise<void> {
     ],
   );
 
-  const worker = queueManager.createWorker<MaintenanceEventPayload>(
+  const worker = queueManager.createWorker<MaintenanceEventPayload | MaintenanceCommandPayload>(
     'maintenance',
     async (job) => {
       stateMachine.beginWork();
-      const envelope: QueueJobEnvelope<MaintenanceEventPayload> = job.data;
+      const envelope: QueueJobEnvelope<MaintenanceEventPayload | MaintenanceCommandPayload> = job.data;
       try {
+        if (await haltIfCancelled(cancellationGate, { jobId: envelope.job_id })) return;
         await runWithCorrelation(
           {
             correlationId: envelope.correlation_id,
             jobId: envelope.job_id,
             workerId: config.app.serviceName,
           },
-          () => processMaintenanceJob({ prisma, logger, envelope }),
+          () => processMaintenanceJob({ prisma, storage, logger, envelope }),
         );
       } finally {
         stateMachine.endWork();
@@ -126,6 +150,7 @@ async function main(): Promise<void> {
       stateMachine.beginWork();
       const envelope: QueueJobEnvelope<ParseBookCommandPayload> = job.data;
       try {
+        if (await haltIfCancelled(cancellationGate, { jobId: envelope.job_id })) return;
         await runWithCorrelation(
           {
             correlationId: envelope.correlation_id,
@@ -159,6 +184,7 @@ async function main(): Promise<void> {
     async (job) => {
       stateMachine.beginWork();
       try {
+        if (await haltIfCancelled(cancellationGate, { jobId: job.data.job_id })) return;
         await runWithCorrelation(
           {
             correlationId: job.data.correlation_id,
@@ -214,6 +240,7 @@ async function main(): Promise<void> {
   assemblyWorker.on('error', (err) => logError(logger, err, 'Assembly worker error'));
 
   processingJobSweeper.start();
+  retentionSweeper.start();
 
   logger.info(
     { concurrency: config.worker.concurrency },
@@ -225,6 +252,7 @@ async function main(): Promise<void> {
     stateMachine.transition('DRAINING');
     try {
       await processingJobSweeper.stop();
+      retentionSweeper.stop();
       await queueManager.close();
       await ocrProvider.terminate?.();
       await disconnectPrisma(prisma);

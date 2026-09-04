@@ -1,5 +1,6 @@
+import { createHash } from 'node:crypto';
 import { Inject, Injectable } from '@nestjs/common';
-import type { PrismaClient } from '@audio-book/database';
+import type { Prisma, PrismaClient } from '@audio-book/database';
 import { withTransaction } from '@audio-book/database';
 import {
   ConflictError,
@@ -17,9 +18,16 @@ import type { Logger } from '@audio-book/logging';
 import { enqueueProcessingJob, QueueManager } from '@audio-book/queue';
 import { buildStorageKey, checksumBuffer, type StorageProvider } from '@audio-book/storage';
 import { LOGGER, PRISMA, QUEUE_MANAGER, STORAGE_PROVIDER } from '../common/tokens.js';
-import { assertTenantOwnership } from '../common/tenant.js';
+import { assertTenantOwnership, requireRole } from '../common/tenant.js';
+import { decodeCursor, encodeCursor, parseLimit } from '../common/pagination.js';
+import { assertIfMatch } from '../users/users.service.js';
 import type { AuthenticatedPrincipal } from '../common/guards/jwt-auth.guard.js';
+import { QuotaService } from '../common/quota.service.js';
 import { UploadSessionStore, type UploadSessionRecord } from './upload-session.store.js';
+
+export interface PurgeBookBody {
+  confirm_book_id: string;
+}
 
 const PRODUCER = 'api';
 const PRODUCER_VERSION = '1.0.0';
@@ -48,6 +56,29 @@ function parseBookEnvelope(args: {
     correlation_id: args.correlationId,
     tenant_id: args.tenantId,
     payload: { book_file_id: args.bookFileId, parser_version: PARSER_VERSION_FOR_IDEMPOTENCY },
+  };
+}
+
+/**
+ * The `cleanup_artifacts` dispatch envelope for a book purge
+ * (`database-schema.md` §27.4). Dispatched directly via
+ * `enqueueProcessingJob`, the same low-latency path `parseBookEnvelope`
+ * uses — not the Phase 1 outbox-relay path
+ * (`common/providers.module.ts`'s `outboxPublisherProvider`), which only
+ * exists to prove the outbox->queue->worker plumbing for that one synthetic
+ * test event and wraps payloads in an unrelated shape.
+ * `apps/worker-cpu/src/processors/maintenance.ts` branches on
+ * `payload.operation` to run the real purge logic for this shape, while
+ * leaving that Phase 1 fixture's own (`operation`-less) payload shape and
+ * behavior untouched.
+ */
+function purgeBookEnvelope(args: { jobId: string; bookId: string; tenantId: string; correlationId: string }) {
+  return {
+    job_id: args.jobId,
+    entity_id: args.jobId,
+    correlation_id: args.correlationId,
+    tenant_id: args.tenantId,
+    payload: { operation: 'purge_book' as const, book_id: args.bookId },
   };
 }
 
@@ -83,6 +114,46 @@ export interface RequestIngestionBody {
   priority?: 'INTERACTIVE' | 'NORMAL' | 'BULK';
 }
 
+export interface ListBooksQuery {
+  cursor?: string;
+  limit?: string;
+  status?: string;
+  include_deleted?: string;
+}
+
+export interface UpdateBookBody {
+  title?: string;
+  author?: string | null;
+  language?: string;
+  description?: string | null;
+  metadata?: {
+    series?: string | null;
+    series_index?: number | null;
+    publication_year?: number | null;
+    publisher?: string | null;
+  };
+}
+
+/** `api-specification.md` §20.1 — the closed book lifecycle vocabulary. */
+const BOOK_STATUSES = [
+  'CREATED',
+  'UPLOADED',
+  'PARSING',
+  'PARSED',
+  'STRUCTURED',
+  'ANALYZING',
+  'ANALYZED',
+  'CASTING',
+  'SCRIPTING',
+  'SCRIPTED',
+  'GENERATING',
+  'ASSEMBLING',
+  'COMPLETED',
+  'FAILED',
+  'CANCELLED',
+  'NEEDS_REVIEW',
+] as const;
+
 const ACTIVE_JOB_STATUSES = ['CREATED', 'QUEUED', 'RUNNING', 'RETRYING', 'BLOCKED'] as const;
 
 @Injectable()
@@ -93,11 +164,15 @@ export class BooksService {
     @Inject(QUEUE_MANAGER) private readonly queueManager: QueueManager,
     @Inject(LOGGER) private readonly logger: Logger,
     private readonly uploadSessions: UploadSessionStore,
+    private readonly quotas: QuotaService,
   ) {}
 
   // ---- Books ----
 
   async createBook(principal: AuthenticatedPrincipal, body: CreateBookBody) {
+    // The one quota QuotaGuard cannot check: there is no bookId yet, and the
+    // limit is on library size rather than on active generation.
+    await this.quotas.assertCanCreateBook(principal);
     const id = generateId();
     const now = new Date();
     const book = await this.prisma.book.create({
@@ -121,13 +196,64 @@ export class BooksService {
     return toBookDto(book);
   }
 
-  async listBooks(principal: AuthenticatedPrincipal) {
-    const books = await this.prisma.book.findMany({
-      where: { tenantId: principal.tenantId, deletedAt: null },
-      orderBy: { createdAt: 'desc' },
-      take: 50,
+  /**
+   * `api-specification.md` §16.4.
+   *
+   * Phase 1 returned a flat `take: 50` with no cursor, which silently truncated
+   * any library larger than that — a user with 51 books could not reach the
+   * 51st through the API at all. §46/§54 of the Phase 8 brief require
+   * pagination on every potentially large collection, so this is now a proper
+   * keyset page over the same `(created_at desc, id desc)` order the
+   * `book_tenant_created` index already serves.
+   */
+  async listBooks(principal: AuthenticatedPrincipal, query: ListBooksQuery = {}) {
+    const limit = parseLimit(query.limit);
+    const cursor = decodeCursor(query.cursor);
+
+    const where: Prisma.BookWhereInput = { tenantId: principal.tenantId };
+    // §16.6.1: "The book disappears from `GET /books` unless
+    // `include_deleted=true`."
+    if (query.include_deleted !== 'true') where.deletedAt = null;
+    if (query.status) {
+      const statuses = query.status
+        .split(',')
+        .map((v) => v.trim())
+        .filter(Boolean);
+      const invalid = statuses.filter((s) => !(BOOK_STATUSES as readonly string[]).includes(s));
+      if (invalid.length > 0) {
+        throw new ValidationError({
+          message: `status contains ${invalid.length} unrecognized value(s).`,
+          details: [{ field: 'status', issue: 'invalid_enum' }],
+        });
+      }
+      if (statuses.length > 0) where.status = { in: statuses as never };
+    }
+    if (cursor) {
+      where.OR = [
+        { createdAt: { lt: new Date(String(cursor.v)) } },
+        { AND: [{ createdAt: new Date(String(cursor.v)) }, { id: { lt: cursor.id } }] },
+      ];
+    }
+
+    const rows = await this.prisma.book.findMany({
+      where,
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: limit + 1,
     });
-    return books.map(toBookDto);
+
+    const hasMore = rows.length > limit;
+    const page = hasMore ? rows.slice(0, limit) : rows;
+    const last = page.at(-1);
+    return {
+      data: page.map(toBookDto),
+      page: {
+        limit,
+        has_more: hasMore,
+        next_cursor: hasMore && last ? encodeCursor(last.createdAt.toISOString(), last.id) : null,
+        prev_cursor: null,
+        total: null,
+      },
+    };
   }
 
   async getBook(principal: AuthenticatedPrincipal, bookId: string) {
@@ -135,7 +261,240 @@ export class BooksService {
       where: { id: bookId, tenantId: principal.tenantId },
     });
     assertTenantOwnership(book, principal, 'Book not found.');
-    return toBookDto(book);
+    return { data: toBookDto(book), etag: bookEtag(book) };
+  }
+
+  /**
+   * `api-specification.md` §16.5 — user-editable metadata only.
+   *
+   * Two refusals worth naming, both from the spec rather than invented here:
+   *
+   * - `status` is not patchable. It is absent from the request schema, so the
+   *   attempt is a `422 unknown_field` at the validation pipe. Pipeline state
+   *   changes because work happened, never because a client asked.
+   * - `language` cannot change once ingestion has produced canonical text.
+   *   Language participates in parsing and in Director decisions, so a book
+   *   whose language changed after ingestion would carry chapters parsed under
+   *   one language and an Audio Script directed under another. §16.5 makes
+   *   this `409 INVALID_STATE_TRANSITION` with a message pointing at creating
+   *   a new book.
+   */
+  async updateBook(
+    principal: AuthenticatedPrincipal,
+    bookId: string,
+    body: UpdateBookBody,
+    ifMatch?: string,
+  ) {
+    const book = await this.requireOwnedBook(principal, bookId);
+    if (book.deletedAt) {
+      throw new ConflictError({
+        code: 'INVALID_STATE_TRANSITION',
+        message: 'This book is deleted and cannot be edited.',
+      });
+    }
+    assertIfMatch(ifMatch, bookEtag(book));
+
+    if (body.language !== undefined && body.language !== book.language) {
+      if (book.currentBookVersionId !== null) {
+        throw new ConflictError({
+          code: 'INVALID_STATE_TRANSITION',
+          message:
+            'language cannot be changed after ingestion has produced canonical text. Create a new book instead.',
+        });
+      }
+    }
+
+    // `updated_at` alone is not enough to make If-Match work: Prisma's
+    // @updatedAt has millisecond granularity, so two writes in the same
+    // millisecond would share an ETag. `row_version` is the schema's own
+    // concurrency column (§8.1) and is incremented on every patch here.
+    const updated = await this.prisma.book.update({
+      where: { id: bookId },
+      data: {
+        title: body.title,
+        author: body.author === null ? null : body.author,
+        language: body.language,
+        description: body.description === null ? null : body.description,
+        series: body.metadata?.series === null ? null : body.metadata?.series,
+        seriesIndex: body.metadata?.series_index === null ? null : body.metadata?.series_index,
+        publicationYear:
+          body.metadata?.publication_year === null ? null : body.metadata?.publication_year,
+        publisher: body.metadata?.publisher === null ? null : body.metadata?.publisher,
+        rowVersion: { increment: 1 },
+      },
+    });
+
+    this.logger.info({ book_id: bookId }, 'Book metadata updated');
+    return { data: toBookDto(updated), etag: bookEtag(updated) };
+  }
+
+  /**
+   * `api-specification.md` §16.6.1 — **soft** delete.
+   *
+   * `context.md` §4.1 mandates soft deletion for user-facing entities and §4.4
+   * defines no `ARCHIVED` state, so "archive" is not a separate concept here:
+   * deletion is a `deleted_at` stamp. Artifacts are retained for the retention
+   * window (§12.3) — this method deliberately deletes no bytes.
+   *
+   * Refusing while jobs are live is not tidiness: deleting a book out from
+   * under running GPU work orphans the spend and leaves artifacts whose parent
+   * is gone. The caller is told to cancel first, and `POST
+   * /jobs/{id}/cancellation` is how.
+   */
+  async deleteBook(principal: AuthenticatedPrincipal, bookId: string): Promise<void> {
+    const book = await this.requireOwnedBook(principal, bookId);
+    if (book.deletedAt) return; // §16.6.1: naturally idempotent.
+
+    const activeJobs = await this.prisma.processingJob.count({
+      where: { bookId, status: { in: ['QUEUED', 'RUNNING', 'RETRYING'] } },
+    });
+    if (activeJobs > 0) {
+      throw new ConflictError({
+        code: 'BOOK_HAS_ACTIVE_JOBS',
+        message: `${activeJobs} job(s) are still running for this book. Cancel them before deleting it.`,
+      });
+    }
+
+    await this.prisma.book.update({
+      where: { id: bookId },
+      data: { deletedAt: new Date(), rowVersion: { increment: 1 } },
+    });
+    this.logger.info({ book_id: bookId }, 'Book soft-deleted');
+  }
+
+  /**
+   * `api-specification.md` §16.6.2 — undo a soft delete within the retention
+   * window. `TENANT_OWNER` only (a stricter check than the controller's
+   * `TenantRoleGuard`, which admits any tenant member). Never touches
+   * `status`: the book returns to exactly the lifecycle state it held at
+   * deletion, matching "restoration never advances or rewinds the pipeline."
+   * `BookPurgeGuard` (on the controller) has already turned a purged book
+   * into `410` before this method would ever run — a book reaching here
+   * that is not soft-deleted is a genuine `409`, not a purge case.
+   */
+  async restoreBook(principal: AuthenticatedPrincipal, bookId: string) {
+    requireRole(principal, 'TENANT_OWNER');
+    const book = await this.requireOwnedBook(principal, bookId);
+    if (!book.deletedAt) {
+      throw new ConflictError({
+        code: 'INVALID_STATE_TRANSITION',
+        message: 'This book is not deleted.',
+      });
+    }
+    const restored = await this.prisma.book.update({
+      where: { id: bookId },
+      data: { deletedAt: null, rowVersion: { increment: 1 } },
+    });
+    this.logger.info({ book_id: bookId }, 'Book restored');
+    return { data: toBookDto(restored) };
+  }
+
+  /**
+   * `api-specification.md` §16.6.3 — irreversible purge. `TENANT_OWNER`
+   * only, `Idempotency-Key` required (enforced by the controller via
+   * `IdempotencyService`, the same pattern `createBook` uses), and
+   * `confirm_book_id` must equal the path id — a destructive irreversible
+   * operation needs an explicit confirmation token in the body, not just the
+   * URL a script could construct blindly.
+   *
+   * This method only *admits* the purge: it validates preconditions and
+   * enqueues the `cleanup_artifacts` job that does the actual bottom-up
+   * deletion (`database-schema.md` §27.4) in `worker-cpu`. Returning `202`
+   * with a job handle, not `204`, is deliberate — the spec is explicit that
+   * purge is asynchronous because it can delete millions of objects.
+   */
+  async purgeBook(principal: AuthenticatedPrincipal, bookId: string, body: PurgeBookBody) {
+    requireRole(principal, 'TENANT_OWNER');
+    if (body.confirm_book_id !== bookId) {
+      // §16.6.3 calls this `inconsistent_with` in prose; the closed
+      // `details[].issue` vocabulary this codebase validates against
+      // (api-specification.md §12.1) does not include that value, so this
+      // maps to the closest member of the actual closed set instead of
+      // inventing a tenth one.
+      throw new ValidationError({
+        message: 'confirm_book_id must equal the bookId in the path.',
+        details: [{ field: 'confirm_book_id', issue: 'invalid_format' }],
+      });
+    }
+
+    const book = await this.requireOwnedBook(principal, bookId);
+    if (!book.deletedAt) {
+      throw new ConflictError({
+        code: 'INVALID_STATE_TRANSITION',
+        message: 'The book must be soft-deleted before it can be purged.',
+      });
+    }
+    const activeJobs = await this.prisma.processingJob.count({
+      where: { bookId, status: { in: [...ACTIVE_JOB_STATUSES] } },
+    });
+    if (activeJobs > 0) {
+      throw new ConflictError({
+        code: 'BOOK_HAS_ACTIVE_JOBS',
+        message: `${activeJobs} job(s) are still associated with this book. Cancel them before purging it.`,
+      });
+    }
+
+    const jobId = generateId();
+    const correlationId = generateId();
+    const now = new Date();
+    const idempotencyFingerprint = createHash('sha256').update(`purge:${bookId}`).digest('hex');
+
+    await this.prisma.processingJob.create({
+      data: {
+        id: jobId,
+        tenantId: principal.tenantId,
+        bookId,
+        type: 'cleanup_artifacts',
+        queue: 'maintenance',
+        priority: 'BULK',
+        relatedResourceType: 'book',
+        relatedResourceId: bookId,
+        status: 'CREATED',
+        statusChangedAt: now,
+        maxAttempts: 3,
+        idempotencyKey: `purge_book:${bookId}`,
+        idempotencyFingerprint,
+        correlationId,
+        dispatchEnvelope: purgeBookEnvelope({ jobId, bookId, tenantId: principal.tenantId, correlationId }),
+      },
+    });
+
+    await enqueueProcessingJob(this.prisma, this.queueManager, {
+      processingJobId: jobId,
+      queue: 'maintenance',
+      envelope: purgeBookEnvelope({ jobId, bookId, tenantId: principal.tenantId, correlationId }),
+      jobName: 'cleanup_artifacts',
+      maxAttempts: 3,
+    });
+    this.logger.info({ book_id: bookId, job_id: jobId }, 'Book purge enqueued');
+
+    return {
+      job: { id: jobId, type: 'cleanup_artifacts' as const, status: 'CREATED' as const, book_id: bookId },
+    };
+  }
+
+  /**
+   * `api-specification.md` §15.3 / §4.2 — `BookFile` is created by the upload
+   * flow and never edited, so this is read-only.
+   */
+  async listBookFiles(principal: AuthenticatedPrincipal, bookId: string) {
+    await this.requireOwnedBook(principal, bookId);
+    const files = await this.prisma.bookFile.findMany({
+      where: { bookId },
+      orderBy: { createdAt: 'desc' },
+      take: 100,
+    });
+    return {
+      data: files.map(toBookFileDto),
+      page: { limit: 100, has_more: false, next_cursor: null, prev_cursor: null, total: null },
+    };
+  }
+
+  async getBookFile(principal: AuthenticatedPrincipal, bookId: string, bookFileId: string) {
+    await this.requireOwnedBook(principal, bookId);
+    const file = await this.prisma.bookFile.findFirst({ where: { id: bookFileId, bookId } });
+    if (!file) throw new NotFoundError({ message: 'Book file not found.' });
+    return toBookFileDto(file);
   }
 
   private async requireOwnedBook(principal: AuthenticatedPrincipal, bookId: string) {
@@ -398,6 +757,11 @@ export class BooksService {
       tenantId: principal.tenantId,
       correlationId,
     });
+
+    // Phase 10 quota completion: STORAGE_BYTES. The dominant, already-known
+    // size at admission time — assembled-audio artifact sizes are a smaller,
+    // separate follow-on (see docs/application/quota-and-usage-model.md).
+    await this.quotas.recordUsage(principal.tenantId, 'STORAGE_BYTES', buffer.byteLength);
 
     session.status = 'ADMITTED';
     session.bookFileId = bookFileId;
@@ -696,10 +1060,17 @@ interface BookRow {
   author: string | null;
   language: string;
   description: string | null;
+  series: string | null;
+  seriesIndex: number | null;
+  publicationYear: number | null;
+  publisher: string | null;
   status: string;
   pipelineVersion: string;
   needsReview: boolean;
   currentBookVersionId: string | null;
+  currentAudioScriptId: string | null;
+  currentAudiobookId: string | null;
+  rowVersion: number;
   createdAt: Date;
   updatedAt: Date;
   deletedAt: Date | null;
@@ -714,13 +1085,80 @@ function toBookDto(book: BookRow) {
     author: book.author,
     language: book.language,
     description: book.description,
+    metadata: {
+      series: book.series,
+      series_index: book.seriesIndex,
+      publication_year: book.publicationYear,
+      publisher: book.publisher,
+    },
     status: book.status,
     pipeline_version: book.pipelineVersion,
     needs_review: book.needsReview,
     current_book_version_id: book.currentBookVersionId,
+    current_audio_script_id: book.currentAudioScriptId,
+    // QA finding F-16: `book.current_audiobook_id` has no writer, so this is
+    // reported from the column and will read `null` even for a book with a
+    // READY audiobook. `GET /books/{id}/audiobook` derives the current
+    // audiobook from the `Audiobook` table and is the reliable pointer today.
+    current_audiobook_id: book.currentAudiobookId,
     created_at: book.createdAt,
     updated_at: book.updatedAt,
     deleted_at: book.deletedAt,
+    links: {
+      self: `/api/v1/books/${book.id}`,
+      progress: `/api/v1/books/${book.id}/progress`,
+      events: `/api/v1/books/${book.id}/events`,
+      jobs: `/api/v1/jobs?book_id=${book.id}`,
+      files: `/api/v1/books/${book.id}/files`,
+    },
+  };
+}
+
+/**
+ * The optimistic-concurrency token of §2.8, derived from `row_version` rather
+ * than from a hash of the response body: a body hash would change every time
+ * this DTO gains a field, invalidating every client's stored `If-Match` on
+ * deploy for no semantic reason.
+ */
+export function bookEtag(book: { id: string; rowVersion: number }): string {
+  return `"${createHash('sha256').update(`${book.id}:${book.rowVersion}`).digest('hex').slice(0, 32)}"`;
+}
+
+interface BookFileRow {
+  id: string;
+  bookId: string;
+  sourceKind: string;
+  originalFileName: string;
+  mimeType: string;
+  sniffedMimeType: string | null;
+  sizeBytes: bigint;
+  contentHash: string;
+  status: string;
+  validation: unknown;
+  createdAt: Date;
+}
+
+/**
+ * `storage_key` and `storage_bucket` are deliberately absent: §14.8/§14.9 keep
+ * object-storage keys and bucket names out of public responses, and a client
+ * that needs the bytes mints an access URL instead.
+ */
+function toBookFileDto(file: BookFileRow) {
+  return {
+    id: file.id,
+    object: 'book_file' as const,
+    book_id: file.bookId,
+    source_kind: file.sourceKind,
+    original_file_name: file.originalFileName,
+    mime_type: file.mimeType,
+    sniffed_mime_type: file.sniffedMimeType,
+    size_bytes: Number(file.sizeBytes),
+    content_hash: { algorithm: 'sha256' as const, value: file.contentHash },
+    status: file.status,
+    validation: file.validation,
+    created_at: file.createdAt.toISOString(),
+    // BookFile is immutable (§4.2 "never edited") — §7.1's immutable rule.
+    updated_at: file.createdAt.toISOString(),
   };
 }
 

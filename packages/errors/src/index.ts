@@ -14,6 +14,7 @@ export type ErrorCategory =
   | 'AUTHENTICATION'
   | 'AUTHORIZATION'
   | 'NOT_FOUND'
+  | 'METHOD_NOT_ALLOWED'
   | 'GONE'
   | 'CONFLICT'
   | 'PAYLOAD_TOO_LARGE'
@@ -30,6 +31,7 @@ const CATEGORY_HTTP_STATUS: Record<ErrorCategory, number> = {
   AUTHENTICATION: 401,
   AUTHORIZATION: 403,
   NOT_FOUND: 404,
+  METHOD_NOT_ALLOWED: 405,
   GONE: 410,
   CONFLICT: 409,
   PAYLOAD_TOO_LARGE: 413,
@@ -95,6 +97,7 @@ const DEFAULT_RETRYABLE: Record<ErrorCategory, boolean> = {
   AUTHENTICATION: false,
   AUTHORIZATION: false,
   NOT_FOUND: false,
+  METHOD_NOT_ALLOWED: false,
   GONE: false,
   CONFLICT: false,
   PAYLOAD_TOO_LARGE: false,
@@ -143,6 +146,24 @@ export class AuthorizationError extends AppError {
 export class NotFoundError extends AppError {
   constructor(options: SubclassOptions = { message: 'Resource not found.' }) {
     super({ ...options, code: options.code ?? 'RESOURCE_NOT_FOUND', category: 'NOT_FOUND' });
+  }
+}
+
+/**
+ * `api-specification.md` §9.1/§9.2: a method the resource *never* supports —
+ * `PATCH` on an immutable `AudioChunk`, say. Deliberately distinct from
+ * `ConflictError`: a `409` means the resource supports the method but its
+ * current **state** forbids it, so the same call succeeds in another state.
+ * Collapsing the two would make the distinction the specification calls
+ * "contractual and testable" untestable.
+ */
+export class MethodNotAllowedError extends AppError {
+  constructor(options: SubclassOptions = { message: 'Method not allowed for this resource.' }) {
+    super({
+      ...options,
+      code: options.code ?? 'METHOD_NOT_ALLOWED',
+      category: 'METHOD_NOT_ALLOWED',
+    });
   }
 }
 

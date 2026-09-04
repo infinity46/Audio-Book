@@ -47,6 +47,7 @@ describe('processMaintenanceJob', () => {
 
     await processMaintenanceJob({
       prisma: prisma as never,
+      storage: {} as never,
       logger,
       envelope: {
         job_id: 'outbox-msg-1',
@@ -95,8 +96,8 @@ describe('processMaintenanceJob', () => {
       },
     };
 
-    await processMaintenanceJob({ prisma: prisma as never, logger, envelope });
-    await processMaintenanceJob({ prisma: prisma as never, logger, envelope });
+    await processMaintenanceJob({ prisma: prisma as never, storage: {} as never, logger, envelope });
+    await processMaintenanceJob({ prisma: prisma as never, storage: {} as never, logger, envelope });
 
     expect(processingJobUpdates).toHaveLength(1);
     expect(logger.info).toHaveBeenLastCalledWith(
@@ -114,6 +115,7 @@ describe('processMaintenanceJob', () => {
     await expect(
       processMaintenanceJob({
         prisma: prisma as never,
+        storage: {} as never,
         logger,
         envelope: {
           job_id: 'outbox-msg-1',

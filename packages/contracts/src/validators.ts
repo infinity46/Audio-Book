@@ -57,6 +57,23 @@ export const createAccessUrlSchema = loadSchema('create-access-url.schema.json')
 export const startAssemblySchema = loadSchema('start-assembly.schema.json');
 export const updateAudiobookMetadataSchema = loadSchema('update-audiobook-metadata.schema.json');
 
+// --- Phase 8 application layer (api-specification.md §16.2, §16.5, §16.18, §16.22) ---
+export const cancelJobSchema = loadSchema('cancel-job.schema.json');
+export const updateBookSchema = loadSchema('update-book.schema.json');
+export const updateCurrentUserSchema = loadSchema('update-current-user.schema.json');
+export const updateTenantQuotasSchema = loadSchema('update-tenant-quotas.schema.json');
+export const replayJobSchema = loadSchema('replay-job.schema.json');
+
+// --- Phase 10 identity/auth (api-specification.md §16.1) ---
+export const registerSchema = loadSchema('register.schema.json');
+export const loginSchema = loadSchema('login.schema.json');
+export const mfaExchangeSchema = loadSchema('mfa-exchange.schema.json');
+export const refreshTokenSchema = loadSchema('refresh-token.schema.json');
+export const passwordResetRequestSchema = loadSchema('password-reset-request.schema.json');
+export const passwordResetConfirmSchema = loadSchema('password-reset-confirm.schema.json');
+export const restoreBookSchema = loadSchema('restore-book.schema.json');
+export const purgeBookSchema = loadSchema('purge-book.schema.json');
+
 export const validateCommandEnvelope: ValidateFunction = ajv.compile(commandEnvelopeSchema);
 export const validateEventEnvelope: ValidateFunction = ajv.compile(eventEnvelopeSchema);
 

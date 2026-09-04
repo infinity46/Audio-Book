@@ -1,0 +1,19 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "UpdateCurrentUser",
+  "description": "PATCH /api/v1/users/me — api-specification.md §16.2. `email` and `roles` are deliberately absent: an email change is an auth-domain operation and roles are administrative.",
+  "type": "object",
+  "additionalProperties": false,
+  "minProperties": 1,
+  "properties": {
+    "display_name": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "preferences": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "locale": { "type": "string", "maxLength": 32 },
+        "notification_email": { "type": "boolean" }
+      }
+    }
+  }
+}

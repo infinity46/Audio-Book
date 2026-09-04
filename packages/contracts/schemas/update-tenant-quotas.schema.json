@@ -1,0 +1,14 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "UpdateTenantQuotas",
+  "description": "PATCH /api/v1/admin/tenants/{tenantId}/quotas — api-specification.md §16.22. PLATFORM_ADMIN only, audited.",
+  "type": "object",
+  "additionalProperties": false,
+  "minProperties": 1,
+  "properties": {
+    "concurrent_books": { "type": "integer", "minimum": 0, "maximum": 10000 },
+    "gpu_minutes_monthly": { "type": "integer", "minimum": 0 },
+    "storage_bytes": { "type": "integer", "minimum": 0 },
+    "books_total": { "type": "integer", "minimum": 0, "maximum": 1000000 }
+  }
+}

@@ -54,6 +54,13 @@ function makeFakePrisma() {
         if (job) Object.assign(job, data);
         return Promise.resolve(job);
       }),
+      count: vi.fn(({ where }: { where: { bookId: string; status: { in: string[] } } }) =>
+        Promise.resolve(
+          processingJobs.filter(
+            (j) => j.bookId === where.bookId && where.status.in.includes(j.status as string),
+          ).length,
+        ),
+      ),
     },
     book: {
       update: vi.fn(({ where, data }: { where: { id: string }; data: Record<string, unknown> }) => {
@@ -145,17 +152,27 @@ function makeService() {
   };
   const logger = { info: vi.fn() };
 
+  // A tenant with no `tenant_quota` row is unlimited (see QuotaService), which
+  // is what every fixture in this file models — so the stub asserts nothing and
+  // simply lets creation through, exactly as the real service would.
+  const quotas = {
+    assertCanCreateBook: vi.fn(() => Promise.resolve()),
+    recordUsage: vi.fn(() => Promise.resolve()),
+  };
+
   const service = new BooksService(
     prisma as never,
     storage,
     queueManager as never,
     logger as never,
     uploadSessions as never,
+    quotas as never,
   );
 
   return {
     service,
     prisma,
+    quotas,
     storage,
     uploadSessions,
     queueManager,
@@ -223,6 +240,29 @@ describe('BooksService upload flow', () => {
     expect(call[0]).toBe('parse');
     expect(call[1].payload.book_file_id).toBe(createdBookFileId);
     expect(outboxMessages.map((m) => m.eventType)).toEqual(['book.uploaded']);
+  });
+
+  it('records STORAGE_BYTES usage for the admitted file (Phase 10 quota completion)', async () => {
+    const { service, storage, quotas } = makeService();
+    const book = await service.createBook(principal, { title: 'Book', language: 'en' });
+    const session = await service.createUploadSession(principal, book.id, {
+      file_name: 'book.pdf',
+      declared_mime_type: 'application/pdf',
+      declared_size_bytes: PDF_BUFFER.byteLength,
+      declared_content_hash: { algorithm: 'SHA256', value: PDF_HASH },
+      source_kind: 'PDF',
+    });
+    await storage.put({
+      key: `tenant-1/books/${book.id}/uploads/${session.id}/source.pdf`,
+      body: PDF_BUFFER,
+      contentType: 'application/pdf',
+    });
+
+    await service.completeUploadSession(principal, book.id, session.id, {
+      observed_size_bytes: PDF_BUFFER.byteLength,
+    });
+
+    expect(quotas.recordUsage).toHaveBeenCalledWith('tenant-1', 'STORAGE_BYTES', PDF_BUFFER.byteLength);
   });
 
   it('rejects completion when the uploaded content hash does not match the declared hash', async () => {
@@ -300,6 +340,94 @@ describe('BooksService.requestIngestion', () => {
     await expect(
       service.requestIngestion(principal, book.id, { book_file_id: 'file-1' }),
     ).rejects.toMatchObject({ code: 'INGESTION_ALREADY_RUNNING' });
+  });
+});
+
+const owner = { sub: 'owner-1', tenantId: 'tenant-1', roles: ['TENANT_OWNER'], scopes: [] };
+const member = { sub: 'member-1', tenantId: 'tenant-1', roles: ['TENANT_MEMBER'], scopes: [] };
+
+describe('BooksService.restoreBook (§16.6.2)', () => {
+  it('clears deletedAt and never touches status', async () => {
+    const { service } = makeService();
+    const book = await service.createBook(owner, { title: 'Book', language: 'en' });
+    await service.deleteBook(owner, book.id);
+
+    const { data } = await service.restoreBook(owner, book.id);
+    expect(data.deleted_at).toBeNull();
+    expect(data.status).toBe('CREATED');
+  });
+
+  it('rejects a non-owner with AuthorizationError, not silently allowing it', async () => {
+    const { service } = makeService();
+    const book = await service.createBook(owner, { title: 'Book', language: 'en' });
+    await service.deleteBook(owner, book.id);
+
+    await expect(service.restoreBook(member, book.id)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  });
+
+  it('409s a book that is not deleted', async () => {
+    const { service } = makeService();
+    const book = await service.createBook(owner, { title: 'Book', language: 'en' });
+    await expect(service.restoreBook(owner, book.id)).rejects.toMatchObject({
+      code: 'INVALID_STATE_TRANSITION',
+    });
+  });
+});
+
+describe('BooksService.purgeBook (§16.6.3)', () => {
+  it('enqueues a cleanup_artifacts job once preconditions are satisfied', async () => {
+    const { service, queueManager, processingJobs } = makeService();
+    const book = await service.createBook(owner, { title: 'Book', language: 'en' });
+    await service.deleteBook(owner, book.id);
+
+    const result = await service.purgeBook(owner, book.id, { confirm_book_id: book.id });
+    expect(result.job.type).toBe('cleanup_artifacts');
+    expect(processingJobs.some((j) => j.type === 'cleanup_artifacts' && j.bookId === book.id)).toBe(
+      true,
+    );
+    const call = queueManager.enqueue.mock.calls[0]!;
+    expect(call[0]).toBe('maintenance');
+  });
+
+  it('rejects a confirm_book_id that does not match the path bookId', async () => {
+    const { service } = makeService();
+    const book = await service.createBook(owner, { title: 'Book', language: 'en' });
+    await service.deleteBook(owner, book.id);
+
+    await expect(
+      service.purgeBook(owner, book.id, { confirm_book_id: 'wrong-id' }),
+    ).rejects.toMatchObject({ code: 'VALIDATION_FAILED' });
+  });
+
+  it('409s a book that has not been soft-deleted first', async () => {
+    const { service } = makeService();
+    const book = await service.createBook(owner, { title: 'Book', language: 'en' });
+    await expect(
+      service.purgeBook(owner, book.id, { confirm_book_id: book.id }),
+    ).rejects.toMatchObject({ code: 'INVALID_STATE_TRANSITION' });
+  });
+
+  it('refuses to purge while jobs are still active', async () => {
+    const { service, prisma } = makeService();
+    const book = await service.createBook(owner, { title: 'Book', language: 'en' });
+    await service.deleteBook(owner, book.id);
+    await (prisma as unknown as { processingJob: { create: (a: unknown) => Promise<unknown> } }).processingJob.create(
+      { data: { id: 'job-active', bookId: book.id, status: 'RUNNING' } },
+    );
+
+    await expect(
+      service.purgeBook(owner, book.id, { confirm_book_id: book.id }),
+    ).rejects.toMatchObject({ code: 'BOOK_HAS_ACTIVE_JOBS' });
+  });
+
+  it('rejects a non-owner even if the book is otherwise purge-eligible', async () => {
+    const { service } = makeService();
+    const book = await service.createBook(owner, { title: 'Book', language: 'en' });
+    await service.deleteBook(owner, book.id);
+
+    await expect(
+      service.purgeBook(member, book.id, { confirm_book_id: book.id }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
   });
 });
 

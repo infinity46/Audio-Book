@@ -1,0 +1,7 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "RestoreBook",
+  "description": "POST /api/v1/books/{bookId}/restoration — api-specification.md §16.6.2. Empty body.",
+  "type": "object",
+  "additionalProperties": false
+}
